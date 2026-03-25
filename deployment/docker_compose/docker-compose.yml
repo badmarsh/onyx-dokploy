@@ -50,8 +50,7 @@ services:
       uvicorn onyx.main:app --host 0.0.0.0 --port 8080"
     # Check env.template and copy to .env for env vars
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     depends_on:
       relational_db:
         condition: service_started
@@ -141,8 +140,7 @@ services:
       fi &&
       /app/scripts/supervisord_entrypoint.sh"
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     depends_on:
       relational_db:
         condition: service_started
@@ -223,8 +221,7 @@ services:
         - NEXT_PUBLIC_DO_NOT_USE_TOGGLE_OFF_DANSWER_POWERED=${NEXT_PUBLIC_DO_NOT_USE_TOGGLE_OFF_DANSWER_POWERED:-false}
         - NODE_OPTIONS=${NODE_OPTIONS:-"--max-old-space-size=4096"}
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     depends_on:
       - api_server
     restart: unless-stopped
@@ -293,8 +290,7 @@ services:
         exec uvicorn model_server.main:app --host 0.0.0.0 --port 9000;
       fi"
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     restart: unless-stopped
     volumes:
       # Not necessary, this is just to reduce download time during startup
@@ -340,8 +336,7 @@ services:
         exec uvicorn model_server.main:app --host 0.0.0.0 --port 9000;
       fi"
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     restart: unless-stopped
     environment:
       - INDEXING_ONLY=True
@@ -372,8 +367,7 @@ services:
     shm_size: 1g
     command: -c 'max_connections=250'
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     restart: unless-stopped
     # PRODUCTION: Override the defaults by passing in the environment variables
     environment:
@@ -397,8 +391,7 @@ services:
     image: vespaengine/vespa:8.609.39
     restart: unless-stopped
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     environment:
       - VESPA_SKIP_UPGRADE_CHECK=${VESPA_SKIP_UPGRADE_CHECK:-true}
     # DEV: To expose ports, either:
@@ -468,8 +461,7 @@ services:
       - api_server
       - web_server
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     environment:
       - DOMAIN=${DOMAIN:-localhost}
       # Nginx proxy timeout settings (in seconds)
@@ -524,8 +516,7 @@ services:
     # persistence. explicitly setting save and appendonly forces ephemeral behavior.
     command: redis-server --save "" --appendonly no
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     # Use tmpfs to prevent creation of anonymous volumes for /data
     tmpfs:
       - /data
@@ -541,8 +532,7 @@ services:
     #   - "9004:9000"
     #   - "9005:9001"
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -562,8 +552,7 @@ services:
     command: ["bash", "./entrypoint.sh", "code-interpreter-api"]
     restart: unless-stopped
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
 
     # Below is needed for the `docker-out-of-docker` execution mode
     # For Linux rootless Docker, set DOCKER_SOCK_PATH=${XDG_RUNTIME_DIR}/docker.sock
@@ -579,8 +568,7 @@ services:
     container_name: onyx-unstructured-api
     restart: unless-stopped
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     networks:
       default:
         aliases:
