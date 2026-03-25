@@ -590,3 +590,41 @@ def fetch_llm_provider_by_type_for_build_mode(
     if not provider_model:
         return None
     return LLMProviderView.from_model(provider_model)
+
+
+def fetch_llm_provider_for_build_mode(
+    db_session: Session,
+    provider_type: str | None = None,
+    provider_name: str | None = None,
+) -> LLMProviderView | None:
+    """Fetch the requested build-mode provider with an exact-name preference.
+
+    Resolution priority:
+    1. Exact provider name from the cookie/UI selection
+    2. Legacy provider-type lookup
+    """
+    from onyx.db.llm import fetch_existing_llm_provider
+
+    if provider_name:
+        provider_model = fetch_existing_llm_provider(
+            name=provider_name, db_session=db_session
+        )
+        if provider_model:
+            if provider_type and provider_model.provider != provider_type:
+                logger.warning(
+                    f"Requested provider {provider_name} has type "
+                    f"{provider_model.provider}, expected {provider_type}. "
+                    "Ignoring the exact-name match."
+                )
+            else:
+                return LLMProviderView.from_model(provider_model)
+        else:
+            logger.warning(
+                f"Requested provider name {provider_name} not found, "
+                "falling back to provider-type lookup"
+            )
+
+    if not provider_type:
+        return None
+
+    return fetch_llm_provider_by_type_for_build_mode(db_session, provider_type)

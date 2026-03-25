@@ -44,6 +44,17 @@ from acp.schema import ToolCallStart
 from pydantic import ValidationError
 
 from onyx.server.features.build.api.packet_logger import get_packet_logger
+from onyx.server.features.build.sandbox.acp_error_handling import (
+    build_empty_prompt_response_error,
+)
+from onyx.server.features.build.sandbox.acp_error_handling import (
+    extract_session_error_event,
+)
+from onyx.server.features.build.sandbox.acp_error_handling import (
+    should_treat_prompt_response_as_error,
+)
+from onyx.server.features.build.sandbox.acp_types import SSEKeepalive
+from onyx.server.features.build.configs import SSE_KEEPALIVE_INTERVAL
 
 
 # ACP Protocol version
@@ -76,6 +87,7 @@ ACPEvent = (
     | CurrentModeUpdate  # Agent mode change
     | PromptResponse  # Agent finished (contains stop_reason)
     | Error  # An error occurred
+    | SSEKeepalive  # Internal keepalive marker for SSE transport
 )
 
 
@@ -585,7 +597,9 @@ class ACPAgentClient:
 
         request_id = self._send_request("session/prompt", params)
         start_time = time.time()
+        last_event_time = start_time
         events_yielded = 0
+        keepalive_count = 0
 
         while True:
             remaining = timeout - (time.time() - start_time)
@@ -615,10 +629,30 @@ class ACPAgentClient:
                         message=f"Agent process terminated with code {process.returncode}",
                     )
                     break
+                idle_time = time.time() - last_event_time
+                if idle_time >= SSE_KEEPALIVE_INTERVAL:
+                    keepalive_count += 1
+                    packet_logger.log_raw(
+                        "ACP-SEND-MESSAGE-KEEPALIVE",
+                        {
+                            "session_id": session_id,
+                            "idle_seconds": idle_time,
+                            "keepalive_count": keepalive_count,
+                        },
+                    )
+                    last_event_time = time.time()
+                    yield SSEKeepalive()
                 continue
 
-            # Check for response to our prompt request
-            if message_data.get("id") == request_id:
+            last_event_time = time.time()
+
+            # Check for response to our prompt request.
+            msg_id = message_data.get("id")
+            is_response = "method" not in message_data and (
+                msg_id == request_id
+                or (msg_id is not None and str(msg_id) == str(request_id))
+            )
+            if is_response:
                 if "error" in message_data:
                     error_data = message_data["error"]
                     packet_logger.log_jsonrpc_response(
@@ -633,12 +667,22 @@ class ACPAgentClient:
                     packet_logger.log_jsonrpc_response(
                         request_id, result=result, context="local"
                     )
-                    prompt_response = PromptResponse.model_validate(result)
-                    packet_logger.log_acp_event_yielded(
-                        "prompt_response", prompt_response
-                    )
-                    events_yielded += 1
-                    yield prompt_response
+                    if should_treat_prompt_response_as_error(result, events_yielded):
+                        empty_response_error = build_empty_prompt_response_error(
+                            result
+                        )
+                        packet_logger.log_acp_event_yielded(
+                            "error", empty_response_error
+                        )
+                        events_yielded += 1
+                        yield empty_response_error
+                    else:
+                        prompt_response = PromptResponse.model_validate(result)
+                        packet_logger.log_acp_event_yielded(
+                            "prompt_response", prompt_response
+                        )
+                        events_yielded += 1
+                        yield prompt_response
 
                 # Log completion summary
                 elapsed_ms = (time.time() - start_time) * 1000
@@ -648,6 +692,26 @@ class ACPAgentClient:
                         "session_id": session_id,
                         "events_yielded": events_yielded,
                         "elapsed_ms": elapsed_ms,
+                        "keepalive_count": keepalive_count,
+                    },
+                )
+                break
+
+            session_error = extract_session_error_event(message_data)
+            if session_error is not None:
+                packet_logger.log_acp_event_yielded("error", session_error)
+                events_yielded += 1
+                yield session_error
+
+                elapsed_ms = (time.time() - start_time) * 1000
+                packet_logger.log_raw(
+                    "ACP-SEND-MESSAGE-COMPLETE",
+                    {
+                        "session_id": session_id,
+                        "events_yielded": events_yielded,
+                        "elapsed_ms": elapsed_ms,
+                        "completion_reason": "session_error_notification",
+                        "keepalive_count": keepalive_count,
                     },
                 )
                 break
@@ -665,11 +729,47 @@ class ACPAgentClient:
                 )
 
                 for event in self._process_session_update(update):
+                    if isinstance(event, PromptResponse) and (
+                        should_treat_prompt_response_as_error(
+                            update,
+                            events_yielded,
+                            ignored_keys={"sessionUpdate"},
+                        )
+                    ):
+                        event = build_empty_prompt_response_error(update)
+
                     events_yielded += 1
                     # Log each yielded event
                     event_type = self._get_event_type_name(event)
                     packet_logger.log_acp_event_yielded(event_type, event)
                     yield event
+                    if isinstance(event, PromptResponse):
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        packet_logger.log_raw(
+                            "ACP-SEND-MESSAGE-COMPLETE",
+                            {
+                                "session_id": session_id,
+                                "events_yielded": events_yielded,
+                                "elapsed_ms": elapsed_ms,
+                                "completion_reason": "prompt_response_via_notification",
+                                "keepalive_count": keepalive_count,
+                            },
+                        )
+                        return
+
+                    if isinstance(event, Error):
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        packet_logger.log_raw(
+                            "ACP-SEND-MESSAGE-COMPLETE",
+                            {
+                                "session_id": session_id,
+                                "events_yielded": events_yielded,
+                                "elapsed_ms": elapsed_ms,
+                                "completion_reason": "error_via_notification",
+                                "keepalive_count": keepalive_count,
+                            },
+                        )
+                        return
 
             # Handle requests from agent (e.g., fs/readTextFile)
             elif "method" in message_data and "id" in message_data:

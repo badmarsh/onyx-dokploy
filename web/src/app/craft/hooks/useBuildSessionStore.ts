@@ -1141,6 +1141,7 @@ export const useBuildSessionStore = create<BuildSessionStore>()((set, get) => ({
       const sessionData = await apiCreateSession({
         name: prompt.slice(0, 50),
         demoDataEnabled,
+        llmProviderName: llmSelection?.providerName || null,
         llmProviderType: llmSelection?.provider || null,
         llmModelName: llmSelection?.modelName || null,
       });
@@ -1238,15 +1239,6 @@ export const useBuildSessionStore = create<BuildSessionStore>()((set, get) => ({
         (currentSession?.status === "running" ||
           currentSession?.status === "creating");
 
-      // Construct webapp URL
-      let webappUrl: string | null = null;
-      const hasWebapp = artifacts.some(
-        (a) => a.type === "nextjs_app" || a.type === "web_app"
-      );
-      if (hasWebapp && sessionData.sandbox?.nextjs_port) {
-        webappUrl = `http://localhost:${sessionData.sandbox.nextjs_port}`;
-      }
-
       const status = isStreaming
         ? currentSession!.status
         : needsRestore
@@ -1268,7 +1260,9 @@ export const useBuildSessionStore = create<BuildSessionStore>()((set, get) => ({
         messages: resolvedMessages,
         streamItems,
         artifacts,
-        webappUrl,
+        // The preview URL is resolved through /webapp-info so it stays on the
+        // current origin instead of leaking sandbox-local localhost ports.
+        webappUrl: null,
         sandbox,
         error: null,
         isLoaded: true,
@@ -1477,6 +1471,7 @@ export const useBuildSessionStore = create<BuildSessionStore>()((set, get) => ({
           demoDataEnabled,
           userWorkArea: persona?.workArea || null,
           userLevel: persona?.level || null,
+          llmProviderName: llmSelection?.providerName || null,
           llmProviderType: llmSelection?.provider || null,
           llmModelName: llmSelection?.modelName || null,
         });

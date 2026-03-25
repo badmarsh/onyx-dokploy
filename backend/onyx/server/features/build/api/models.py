@@ -29,6 +29,7 @@ class SessionCreateRequest(BaseModel):
     user_work_area: str | None = None  # User's work area (e.g., "engineering")
     user_level: str | None = None  # User's level (e.g., "ic", "manager")
     # LLM selection from user's cookie
+    llm_provider_name: str | None = None  # Provider name (e.g., "Aliyun DashScope")
     llm_provider_type: str | None = None  # Provider type (e.g., "anthropic", "openai")
     llm_model_name: str | None = None  # Model name (e.g., "claude-opus-4-5")
 
@@ -257,7 +258,7 @@ class DirectoryListing(BaseModel):
 
 class WebappInfo(BaseModel):
     has_webapp: bool  # Whether a webapp exists in outputs/web
-    webapp_url: str | None  # URL to access the webapp (e.g., http://localhost:3015)
+    webapp_url: str | None  # Same-origin proxy path to access the webapp
     status: str  # Sandbox status (running, terminated, etc.)
     ready: bool  # Whether the NextJS dev server is actually responding
     sharing_scope: SharingScope
