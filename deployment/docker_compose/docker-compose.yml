@@ -85,6 +85,7 @@ services:
       - REDIS_HOST=${REDIS_HOST:-cache}
       - MODEL_SERVER_HOST=${MODEL_SERVER_HOST:-inference_model_server}
       - CODE_INTERPRETER_BASE_URL=${CODE_INTERPRETER_BASE_URL:-http://code-interpreter:8000}
+      - UNSTRUCTURED_API_URL=${UNSTRUCTURED_API_URL:-http://unstructured:8000}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
       - S3_AWS_ACCESS_KEY_ID=${S3_AWS_ACCESS_KEY_ID:-minioadmin}
       - S3_AWS_SECRET_ACCESS_KEY=${S3_AWS_SECRET_ACCESS_KEY:-minioadmin}
@@ -167,6 +168,8 @@ services:
       - REDIS_HOST=${REDIS_HOST:-cache}
       - MODEL_SERVER_HOST=${MODEL_SERVER_HOST:-inference_model_server}
       - INDEXING_MODEL_SERVER_HOST=${INDEXING_MODEL_SERVER_HOST:-indexing_model_server}
+      - CODE_INTERPRETER_BASE_URL=${CODE_INTERPRETER_BASE_URL:-http://code-interpreter:8000}
+      - UNSTRUCTURED_API_URL=${UNSTRUCTURED_API_URL:-http://unstructured:8000}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
       - S3_AWS_ACCESS_KEY_ID=${S3_AWS_ACCESS_KEY_ID:-minioadmin}
       - S3_AWS_SECRET_ACCESS_KEY=${S3_AWS_SECRET_ACCESS_KEY:-minioadmin}
@@ -562,6 +565,37 @@ services:
     # uncomment below + comment out the above to use the `docker-in-docker` execution mode
     # privileged: true
 
+  unstructured_api:
+    image: ${UNSTRUCTURED_API_IMAGE:-downloads.unstructured.io/unstructured-io/unstructured-api:latest}
+    container_name: onyx-unstructured-api
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    networks:
+      default:
+        aliases:
+          - unstructured
+          - unstructured_api
+
+  ollama:
+    profiles: ["local-ollama"]
+    image: ollama/ollama:latest
+    container_name: onyx-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/11434' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
   # PRODUCTION: Uncomment the following certbot service for SSL certificate management
   # certbot:
   #   image: certbot/certbot
@@ -581,6 +615,7 @@ volumes:
   db_volume:
   vespa_volume: # Created by the container itself
   minio_data:
+  ollama_data:
   # Caches to prevent re-downloading models, not strictly necessary
   model_cache_huggingface:
   indexing_huggingface_model_cache:
