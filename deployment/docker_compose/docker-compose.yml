@@ -471,11 +471,20 @@ services:
       - path: .env
         required: false
     environment:
-      - DOMAIN=localhost
+      - DOMAIN=${DOMAIN:-localhost}
       # Nginx proxy timeout settings (in seconds)
       - NGINX_PROXY_CONNECT_TIMEOUT=${NGINX_PROXY_CONNECT_TIMEOUT:-300}
       - NGINX_PROXY_SEND_TIMEOUT=${NGINX_PROXY_SEND_TIMEOUT:-300}
       - NGINX_PROXY_READ_TIMEOUT=${NGINX_PROXY_READ_TIMEOUT:-300}
+    labels:
+      - traefik.enable=${TRAEFIK_ENABLED:-false}
+      - traefik.http.routers.onyx.rule=Host(`${DOMAIN:-localhost}`)
+      - traefik.http.routers.onyx.entrypoints=${TRAEFIK_ENTRYPOINTS:-websecure}
+      - traefik.http.routers.onyx.priority=${TRAEFIK_PRIORITY:-100}
+      - traefik.http.routers.onyx.tls=${TRAEFIK_TLS:-true}
+      - traefik.http.routers.onyx.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      - traefik.http.routers.onyx.service=onyx-svc
+      - traefik.http.services.onyx-svc.loadbalancer.server.port=80
     ports:
       - "${HOST_PORT_80:-80}:80"
       - "${HOST_PORT:-3000}:80" # allow for localhost:3000 usage, since that is the norm
