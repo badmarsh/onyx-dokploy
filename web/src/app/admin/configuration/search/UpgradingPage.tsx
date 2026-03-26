@@ -109,6 +109,30 @@ export default function UpgradingPage({
     return statuses;
   }, [futureEmbeddingModel.switchover_type, ongoingReIndexingStatus]);
 
+  const visibleFailedIndexingStatus = useMemo(() => {
+    const failedStatuses = failedIndexingStatus || [];
+
+    if (futureEmbeddingModel.switchover_type !== "active_only") {
+      return failedStatuses;
+    }
+
+    const ccPairStatusById = new Map(
+      ongoingReIndexingStatus.map((status) => [
+        status.cc_pair_id,
+        status.cc_pair_status,
+      ])
+    );
+
+    return failedStatuses.filter((status) => {
+      const ccPairStatus = ccPairStatusById.get(status.cc_pair_id);
+      return ccPairStatus !== ConnectorCredentialPairStatus.PAUSED;
+    });
+  }, [
+    failedIndexingStatus,
+    futureEmbeddingModel.switchover_type,
+    ongoingReIndexingStatus,
+  ]);
+
   const sortedReindexingProgress = useMemo(() => {
     return [...(visibleReindexingStatus || [])].sort((a, b) => {
       const statusComparison =
@@ -193,9 +217,9 @@ export default function UpgradingPage({
                 </div>
               ) : (
                 <>
-                  {failedIndexingStatus && failedIndexingStatus.length > 0 && (
+                  {visibleFailedIndexingStatus.length > 0 && (
                     <FailedReIndexAttempts
-                      failedIndexingStatuses={failedIndexingStatus}
+                      failedIndexingStatuses={visibleFailedIndexingStatus}
                     />
                   )}
 

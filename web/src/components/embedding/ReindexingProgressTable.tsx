@@ -40,7 +40,7 @@ export function ReindexingProgressTable({
             .slice(numToDisplay * (page - 1), numToDisplay * page)
             .map((reindexingProgress) => {
               return (
-                <TableRow key={reindexingProgress.name}>
+                <TableRow key={reindexingProgress.cc_pair_id}>
                   <TableCell>
                     <Link
                       href={`/admin/connector/${reindexingProgress.cc_pair_id}`}
@@ -58,7 +58,7 @@ export function ReindexingProgressTable({
                     )}
                   </TableCell>
                   <TableCell>
-                    {reindexingProgress?.latest_index_attempt_docs_indexed ||
+                    {reindexingProgress.latest_index_attempt_docs_indexed ??
                       "-"}
                   </TableCell>
                 </TableRow>
