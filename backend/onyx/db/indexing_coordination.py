@@ -117,6 +117,7 @@ class IndexingCoordination:
     def request_cancellation(
         db_session: Session,
         index_attempt_id: int,
+        reason: str | None = None,
     ) -> None:
         """
         Request cancellation of an indexing attempt.
@@ -125,6 +126,8 @@ class IndexingCoordination:
         attempt = get_index_attempt(db_session, index_attempt_id)
         if attempt:
             attempt.cancellation_requested = True
+            if reason:
+                attempt.error_msg = reason
             db_session.commit()
 
             logger.info(f"Requested cancellation for attempt {index_attempt_id}")

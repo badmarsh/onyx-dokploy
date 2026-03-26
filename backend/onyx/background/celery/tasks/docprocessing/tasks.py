@@ -331,9 +331,17 @@ def monitor_indexing_attempt_progress(
             f"elapsed={(current_db_time - attempt.time_created).seconds}"
         )
 
+    current_attempt = get_index_attempt(db_session, attempt.id)
+    if not current_attempt or current_attempt.status.is_terminal():
+        task_logger.info(
+            f"Indexing attempt {attempt.id} is already terminal: "
+            f"status={current_attempt.status if current_attempt else 'missing'}"
+        )
+        return
+
     if coordination_status.cancellation_requested:
         task_logger.info(f"Indexing attempt {attempt.id} has been cancelled")
-        mark_attempt_canceled(attempt.id, db_session)
+        mark_attempt_canceled(attempt.id, db_session, "Cancellation requested")
         return
 
     storage = get_document_batch_storage(

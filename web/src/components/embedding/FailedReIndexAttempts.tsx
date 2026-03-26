@@ -98,7 +98,7 @@ export function FailedReIndexAttempts({
               .slice(numToDisplay * (page - 1), numToDisplay * page)
               .map((reindexingProgress) => {
                 return (
-                  <TableRow key={reindexingProgress.name}>
+                  <TableRow key={reindexingProgress.cc_pair_id}>
                     <TableCell>
                       <Link
                         href={`/admin/connector/${reindexingProgress.cc_pair_id}`}
@@ -128,46 +128,52 @@ export function FailedReIndexAttempts({
                         Visit Connector
                       </Link>
                     </TableCell>
-                    <TableCell>
-                      <Disabled disabled={!reindexingProgress.is_deletable}>
-                        <Button
-                          variant="danger"
-                          onClick={async () => {
-                            if (shouldConfirmConnectorDeletion) {
-                              setPendingConnectorDeletion({
-                                connectorId: reindexingProgress.connector_id,
-                                credentialId: reindexingProgress.credential_id,
-                                ccPairId: reindexingProgress.cc_pair_id,
-                                name:
-                                  reindexingProgress.name ?? "this connector",
-                              });
-                              return;
-                            }
+                    {anyDeletable && (
+                      <TableCell>
+                        <Disabled disabled={!reindexingProgress.is_deletable}>
+                          <Button
+                            variant="danger"
+                            onClick={async () => {
+                              if (shouldConfirmConnectorDeletion) {
+                                setPendingConnectorDeletion({
+                                  connectorId: reindexingProgress.connector_id,
+                                  credentialId:
+                                    reindexingProgress.credential_id,
+                                  ccPairId: reindexingProgress.cc_pair_id,
+                                  name:
+                                    reindexingProgress.name ?? "this connector",
+                                });
+                                return;
+                              }
 
-                            try {
-                              await deleteCCPair(
-                                reindexingProgress.connector_id,
-                                reindexingProgress.credential_id,
-                                () =>
-                                  mutate(
-                                    buildCCPairInfoUrl(
-                                      reindexingProgress.cc_pair_id
+                              try {
+                                await deleteCCPair(
+                                  reindexingProgress.connector_id,
+                                  reindexingProgress.credential_id,
+                                  () =>
+                                    mutate(
+                                      buildCCPairInfoUrl(
+                                        reindexingProgress.cc_pair_id
+                                      )
                                     )
-                                  )
-                              );
-                            } catch (error) {
-                              console.error("Error deleting connector:", error);
-                              toast.error(
-                                "Failed to delete connector. Please try again."
-                              );
-                            }
-                          }}
-                          icon={SvgTrash}
-                        >
-                          Delete
-                        </Button>
-                      </Disabled>
-                    </TableCell>
+                                );
+                              } catch (error) {
+                                console.error(
+                                  "Error deleting connector:",
+                                  error
+                                );
+                                toast.error(
+                                  "Failed to delete connector. Please try again."
+                                );
+                              }
+                            }}
+                            icon={SvgTrash}
+                          >
+                            Delete
+                          </Button>
+                        </Disabled>
+                      </TableCell>
+                    )}
                   </TableRow>
                 );
               })}
