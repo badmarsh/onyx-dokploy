@@ -69,7 +69,7 @@ authlib==1.6.9
     # via fastmcp
 azure-cognitiveservices-speech==1.38.0
     # via onyx
-babel==2.17.0
+babel==2.18.0
     # via courlan
 backoff==2.2.1
     # via
