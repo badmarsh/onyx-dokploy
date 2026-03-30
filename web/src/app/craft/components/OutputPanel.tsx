@@ -202,7 +202,7 @@ const BuildOutputPanel = memo(({ onClose, isOpen }: BuildOutputPanelProps) => {
   const shouldPoll =
     !isWebappReady && pollingDeadline !== null && Date.now() < pollingDeadline;
 
-  const { data: webappInfo, mutate } = useSWR(
+  const { data: webappInfo, error: webappInfoError, mutate } = useSWR(
     shouldFetchWebapp ? `/api/build/sessions/${session.id}/webapp-info` : null,
     () => (session?.id ? fetchWebappInfo(session.id) : null),
     {
@@ -219,6 +219,19 @@ const BuildOutputPanel = memo(({ onClose, isOpen }: BuildOutputPanelProps) => {
       setPollingDeadline(null);
     }
   }, [webappInfo?.ready]);
+
+  // If the backend says the session/webapp no longer exists, drop the cached
+  // iframe URL immediately so the preview stops requesting a deleted session.
+  useEffect(() => {
+    if (
+      webappInfoError instanceof Error &&
+      /(?:401|403|404)/.test(webappInfoError.message)
+    ) {
+      setCachedWebappUrl(null);
+      setIsWebappReady(false);
+      setPollingDeadline(null);
+    }
+  }, [webappInfoError]);
 
   // Update cache when SWR returns data for current session
   useEffect(() => {

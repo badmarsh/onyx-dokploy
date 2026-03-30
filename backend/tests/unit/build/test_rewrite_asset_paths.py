@@ -236,6 +236,49 @@ class TestProxyRequestWiring:
             "<title>x</title>"
         )
 
+    def test_proxy_request_requests_local_nextjs_restart_on_connect_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            api, "_get_sandbox_url", lambda *_args: "http://localhost:3015"
+        )
+
+        class FakeClient:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def __enter__(self) -> "FakeClient":
+                return self
+
+            def __exit__(self, *_args: object) -> Literal[False]:
+                return False
+
+            def get(self, _url: str, headers: dict[str, str]) -> httpx.Response:
+                assert "host" not in {key.lower() for key in headers}
+                request = httpx.Request("GET", _url)
+                raise httpx.ConnectError("[Errno 111] Connection refused", request=request)
+
+        monkeypatch.setattr(api.httpx, "Client", FakeClient)
+
+        restart_requested: list[UUID] = []
+
+        def _fake_restart(session_id: UUID, _db_session: Session) -> bool:
+            restart_requested.append(session_id)
+            return True
+
+        monkeypatch.setattr(api, "_request_local_nextjs_restart", _fake_restart)
+
+        request = cast(Request, SimpleNamespace(headers={}, query_params=""))
+
+        with pytest.raises(api.HTTPException) as exc_info:
+            api._proxy_request(
+                "", request, UUID(SESSION_ID), cast(Session, SimpleNamespace())
+            )
+
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail == "Webapp restarting"
+        assert restart_requested == [UUID(SESSION_ID)]
+
     def test_rewrites_absolute_link_header_font_preload_paths(self) -> None:
         headers = {
             "link": (

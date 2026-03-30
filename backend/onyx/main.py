@@ -402,15 +402,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # noqa: ARG001
 
 def log_http_error(request: Request, exc: Exception) -> JSONResponse:
     status_code = getattr(exc, "status_code", 500)
+    request_path = request.url.path
 
     if isinstance(exc, BasicAuthenticationError):
         # For BasicAuthenticationError, just log a brief message without stack trace
         # (almost always spammy)
         logger.debug(f"Authentication failed: {str(exc)}")
 
-    elif status_code == 404 and request.url.path == "/metrics":
+    elif status_code == 404 and request_path == "/metrics":
         # Log 404 errors for the /metrics endpoint with debug level
         logger.debug(f"404 error for /metrics endpoint: {str(exc)}")
+
+    elif status_code == 404 and request_path.startswith("/api/build/sessions/"):
+        # Deleted/stale Craft session previews are expected during normal cleanup.
+        # Avoid emitting full stack traces for these browser retries.
+        logger.debug(f"404 for build session resource {request_path}: {str(exc)}")
+
+    elif status_code == 404:
+        # 404s are typically client routing/probe noise rather than server failures.
+        logger.info(f"404 for {request_path}: {str(exc)}")
 
     elif status_code >= 400:
         error_msg = f"{str(exc)}\n"

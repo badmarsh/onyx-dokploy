@@ -375,6 +375,22 @@ def _get_sandbox_url(session_id: UUID, db_session: Session) -> str:
     return sandbox_manager.get_webapp_url(sandbox.id, session.nextjs_port)
 
 
+def _request_local_nextjs_restart(session_id: UUID, db_session: Session) -> bool:
+    """Ask the local sandbox manager to restart a dead Next.js preview process."""
+    session = db_session.get(BuildSession, session_id)
+    if not session or session.nextjs_port is None or session.user_id is None:
+        return False
+
+    sandbox = get_sandbox_by_user_id(db_session, session.user_id)
+    if sandbox is None:
+        return False
+
+    get_sandbox_manager().ensure_nextjs_running(
+        sandbox.id, session_id, session.nextjs_port
+    )
+    return True
+
+
 def _proxy_request(
     path: str, request: Request, session_id: UUID, db_session: Session
 ) -> StreamingResponse | Response:
@@ -437,6 +453,14 @@ def _proxy_request(
         logger.error(f"Timeout while proxying request to {target_url}")
         raise HTTPException(status_code=504, detail="Gateway timeout")
     except httpx.RequestError as e:
+        if target_url.startswith("http://localhost:") and _request_local_nextjs_restart(
+            session_id, db_session
+        ):
+            logger.warning(
+                f"Webapp preview at {target_url} was unreachable; "
+                f"requested Next.js restart for session {session_id}: {e}"
+            )
+            raise HTTPException(status_code=503, detail="Webapp restarting")
         logger.error(f"Error proxying request to {target_url}: {e}")
         raise HTTPException(status_code=502, detail="Bad gateway")
 
