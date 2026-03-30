@@ -528,7 +528,7 @@ class LitellmLLM(LLM):
         if structured_response_format:
             optional_kwargs["response_format"] = structured_response_format
 
-        if not (is_claude_model or is_ollama or is_mistral) or is_bifrost:
+        if tools and (not (is_claude_model or is_ollama or is_mistral) or is_bifrost):
             # Litellm bug: tool_choice is dropped silently if not specified here for OpenAI
             # However, this param breaks Anthropic and Mistral models,
             # so it must be conditionally included unless the request is
