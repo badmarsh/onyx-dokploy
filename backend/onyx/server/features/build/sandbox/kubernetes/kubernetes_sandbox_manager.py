@@ -144,9 +144,10 @@ fi
 set -e
 cd {session_path}/outputs/web
 {npm_install_check}
-# Start npm run dev in background
+# Start Next.js dev with webpack. Turbopack rejects the shared/symlinked
+# node_modules layout used in sandbox templates.
 echo "Starting Next.js dev server on port {nextjs_port}..."
-nohup npm run dev -- -p {nextjs_port} > {session_path}/nextjs.log 2>&1 &
+nohup npm run dev -- --webpack -p {nextjs_port} > {session_path}/nextjs.log 2>&1 &
 NEXTJS_PID=$!
 echo "Next.js server started with PID $NEXTJS_PID"
 echo $NEXTJS_PID > {session_path}/nextjs.pid

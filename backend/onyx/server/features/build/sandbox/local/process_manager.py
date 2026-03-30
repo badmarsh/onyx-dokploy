@@ -32,7 +32,7 @@ class ProcessManager:
         """Start Next.js dev server.
 
         1. Clear .next cache to avoid stale paths from template
-        2. Start npm run dev on specified port
+        2. Start npm run dev with webpack on specified port
         3. Wait for server to be ready
 
         Args:
@@ -71,8 +71,10 @@ class ProcessManager:
         # This was the root cause of Next.js servers dying after a few minutes.
         # Using None inherits from parent, so logs appear in the backend terminal.
         # FIXME: ideally we should drain the pipe to avoid the buffer overflow, but not for v1
+        # Force webpack instead of Turbopack. Craft sandboxes may use shared/symlinked
+        # node_modules, which Turbopack rejects as outside the filesystem root.
         process = subprocess.Popen(
-            ["npm", "run", "dev", "--", "-p", str(port)],
+            ["npm", "run", "dev", "--", "--webpack", "-p", str(port)],
             cwd=web_dir,
             start_new_session=True,
             stdout=None,

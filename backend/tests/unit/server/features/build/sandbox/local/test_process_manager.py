@@ -16,9 +16,12 @@ def test_start_nextjs_server_uses_isolated_process_group(
     process = Mock()
     process.pid = 1234
 
+    captured_args: tuple[object, ...] = ()
     captured_kwargs: dict[str, object] = {}
 
     def mock_popen(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal captured_args
+        captured_args = args
         captured_kwargs.update(kwargs)
         return process
 
@@ -34,6 +37,10 @@ def test_start_nextjs_server_uses_isolated_process_group(
 
     assert started_process is process
     assert captured_kwargs["start_new_session"] is True
+    assert captured_kwargs["cwd"] == web_dir
+    assert captured_args == (
+        ["npm", "run", "dev", "--", "--webpack", "-p", "3001"],
+    )
 
 
 def test_terminate_process_kills_process_group_when_isolated(monkeypatch) -> None:
