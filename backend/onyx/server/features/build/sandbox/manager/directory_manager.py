@@ -7,6 +7,8 @@ Supports user-shared sandbox model where:
 
 import json
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from onyx.server.features.build.sandbox.util.agent_instructions import (
@@ -101,6 +103,8 @@ class DirectoryManager:
         (sandbox_path / "sessions").mkdir(exist_ok=True)
         return sandbox_path
 
+
+
     def create_session_directory(self, sandbox_path: Path, session_id: str) -> Path:
         """Create session workspace directory structure.
 
@@ -111,6 +115,11 @@ class DirectoryManager:
         │   ├── slides/
         │   ├── markdown/
         │   └── graphs/
+        ├── repos/                      # Working copies of cloned repositories
+        ├── tmp/                        # Scratch space for temporary artifacts
+        ├── downloads/                  # Files fetched during the task
+        ├── .cache/                     # Session-local package and browser caches
+        ├── .home/                      # Session-local HOME directory for CLI tools
         ├── .venv/                      # Python virtual environment
         ├── AGENTS.md                   # Agent instructions
         ├── opencode.json               # LLM config (set up separately)
@@ -130,6 +139,10 @@ class DirectoryManager:
         """
         session_path = sandbox_path / "sessions" / session_id
         session_path.mkdir(parents=True, exist_ok=True)
+
+        for directory_name in ("repos", "tmp", "downloads", ".cache", ".home"):
+            (session_path / directory_name).mkdir(exist_ok=True)
+
         return session_path
 
     def cleanup_session_directory(self, sandbox_path: Path, session_id: str) -> None:
@@ -143,19 +156,6 @@ class DirectoryManager:
         if session_path.exists():
             shutil.rmtree(session_path)
             logger.info(f"Cleaned up session directory: {session_path}")
-
-    def get_session_path(self, sandbox_path: Path, session_id: str) -> Path:
-        """Get path to session workspace.
-
-        Args:
-            sandbox_path: Path to the sandbox directory
-            session_id: Session ID
-
-        Returns:
-            Path to sessions/$session_id/
-        """
-        return sandbox_path / "sessions" / session_id
-
     def setup_files_symlink(
         self,
         sandbox_path: Path,
@@ -236,7 +236,7 @@ class DirectoryManager:
         output_dir = sandbox_path / "outputs"
         if not output_dir.exists():
             if self._outputs_template_path.exists():
-                shutil.copytree(self._outputs_template_path, output_dir, symlinks=True)
+                self._copy_outputs_template(output_dir)
             else:
                 raise RuntimeError(
                     f"Outputs template path does not exist: {self._outputs_template_path}"
@@ -249,6 +249,37 @@ class DirectoryManager:
         # TODO: No graphs for now
         # (output_dir / "graphs").mkdir(parents=True, exist_ok=True)
 
+    def _copy_outputs_template(self, output_dir: Path) -> None:
+        """Copy the writable web template while sharing immutable dependencies.
+
+        The local sandbox edits files under outputs/web, so the project sources
+        must remain per-session. The `node_modules/` tree is immutable template
+        data and dominates startup time and disk usage, so we exclude it from the
+        copy and symlink the shared template directory back in.
+        """
+
+        template_web_dir = self._outputs_template_path / "web"
+        template_node_modules = template_web_dir / "node_modules"
+
+        def _ignore_template_copy(src: str, names: list[str]) -> list[str]:
+            rel_path = Path(src).relative_to(self._outputs_template_path)
+            if rel_path == Path("web") and "node_modules" in names:
+                return ["node_modules"]
+            return []
+
+        shutil.copytree(
+            self._outputs_template_path,
+            output_dir,
+            symlinks=True,
+            ignore=_ignore_template_copy,
+        )
+
+        if template_node_modules.exists():
+            session_node_modules = output_dir / "web" / "node_modules"
+            session_node_modules.symlink_to(
+                template_node_modules, target_is_directory=True
+            )
+
     def setup_venv(self, sandbox_path: Path) -> Path:
         """Copy virtual environment template.
 
@@ -260,8 +291,62 @@ class DirectoryManager:
         """
         venv_path = sandbox_path / ".venv"
         if not venv_path.exists() and self._venv_template_path.exists():
-            shutil.copytree(self._venv_template_path, venv_path, symlinks=True)
+            self._create_session_venv(venv_path)
         return venv_path
+
+    def _create_session_venv(self, venv_path: Path) -> None:
+        """Create a lightweight per-session venv that reuses template packages.
+
+        Copying the entire template venv for each session is expensive. Instead,
+        create a fresh venv for the session and extend its site-packages path
+        with the shared template environment through a `.pth` file. That keeps
+        the session writable for ad-hoc installs without cloning the whole
+        template tree.
+        """
+
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(venv_path)],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            logger.warning(
+                "Failed to create lightweight session venv, falling back to template copy: %s",
+                e.stderr.strip() if e.stderr else e,
+            )
+            shutil.copytree(self._venv_template_path, venv_path, symlinks=True)
+            return
+
+        template_site_packages = self._find_site_packages_path(self._venv_template_path)
+        session_site_packages = self._find_site_packages_path(venv_path)
+
+        if template_site_packages is None or session_site_packages is None:
+            logger.warning(
+                "Could not find site-packages in template/session venv, falling back to template copy"
+            )
+            shutil.rmtree(venv_path, ignore_errors=True)
+            shutil.copytree(self._venv_template_path, venv_path, symlinks=True)
+            return
+
+        shared_packages_path = session_site_packages / "_onyx_shared_template.pth"
+        shared_packages_path.write_text(f"{template_site_packages}\n")
+
+    @staticmethod
+    def _find_site_packages_path(venv_path: Path) -> Path | None:
+        """Return the site-packages directory inside a venv."""
+
+        matches = sorted(venv_path.glob("lib/python*/site-packages"))
+        if matches:
+            return matches[0]
+
+        windows_site_packages = venv_path / "Lib" / "site-packages"
+        if windows_site_packages.exists():
+            return windows_site_packages
+
+        return None
 
     def setup_agent_instructions(
         self,

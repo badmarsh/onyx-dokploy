@@ -416,10 +416,11 @@ def rename_chat_session(
         )
         return RenameChatSessionResponse(new_name=name)
 
-    llm = get_default_llm(
-        additional_headers=extract_headers(
-            request.headers, LITELLM_PASS_THROUGH_HEADERS
-        )
+    llm = _get_llm_for_chat_session_naming(
+        chat_session_id=chat_session_id,
+        request=request,
+        user=user,
+        db_session=db_session,
     )
 
     check_llm_cost_limit_for_provider(
@@ -459,6 +460,27 @@ def rename_chat_session(
     )
 
     return RenameChatSessionResponse(new_name=new_name)
+
+
+def _get_llm_for_chat_session_naming(
+    chat_session_id: UUID,
+    request: Request,
+    user: User,
+    db_session: Session,
+):
+    chat_session = get_chat_session_by_id(
+        chat_session_id=chat_session_id,
+        user_id=user.id,
+        db_session=db_session,
+    )
+
+    return get_llm_for_persona(
+        persona=chat_session.persona,
+        user=user,
+        additional_headers=extract_headers(
+            request.headers, LITELLM_PASS_THROUGH_HEADERS
+        ),
+    )
 
 
 @router.patch("/chat-session/{session_id}")

@@ -27,6 +27,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-venv \
     curl \
     git \
+    jq \
+    ripgrep \
+    fd-find \
+    sqlite3 \
+    ffmpeg \
+    imagemagick \
+    pandoc \
+    tesseract-ocr \
     procps \
     unzip \
     \
@@ -40,6 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fontconfig \
     fonts-dejavu-core \
     fonts-liberation \
+    && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user (matches pod securityContext)

@@ -3,7 +3,9 @@
 # 2. Use user provided custom prompts
 # 3. Save the plan for replay
 
+import re
 import time
+import unicodedata
 from collections.abc import Callable
 from typing import cast
 
@@ -96,6 +98,46 @@ MAX_ORCHESTRATOR_CYCLES = 8
 
 # Similar but without the 4 thinking tool calls
 MAX_ORCHESTRATOR_CYCLES_REASONING = 4
+
+_NO_CLARIFICATION_PATTERNS = (
+    r"\bno (follow[- ]up )?questions\b",
+    r"\bdo not ask (me )?(any )?questions\b",
+    r"\bdont ask (me )?(any )?questions\b",
+    r"\bno clarif(?:ication|ying questions?)\b",
+    r"\bwithout (follow[- ]up )?questions\b",
+    r"\bbez otazok\b",
+    r"\bziadne otazky\b",
+    r"\bzadne otazky\b",
+    r"\bnepytaj sa\b",
+    r"\bneptej se\b",
+)
+
+
+def _normalize_for_clarification_check(message: str) -> str:
+    normalized = unicodedata.normalize("NFKD", message)
+    ascii_only = normalized.encode("ascii", "ignore").decode("ascii")
+    return ascii_only.lower()
+
+
+def _user_explicitly_declined_clarification(
+    simple_chat_history: list[ChatMessageSimple],
+) -> bool:
+    latest_user_message = next(
+        (
+            message.message
+            for message in reversed(simple_chat_history)
+            if message.message_type == MessageType.USER and message.message
+        ),
+        None,
+    )
+    if not latest_user_message:
+        return False
+
+    normalized_message = _normalize_for_clarification_check(latest_user_message)
+    return any(
+        re.search(pattern, normalized_message)
+        for pattern in _NO_CLARIFICATION_PATTERNS
+    )
 
 
 def generate_final_report(
@@ -240,6 +282,10 @@ def run_deep_research_llm_loop(
             if include_internal_search_tunings
             else ""
         )
+        skip_clarification = skip_clarification or _user_explicitly_declined_clarification(
+            simple_chat_history
+        )
+
         if not SKIP_DEEP_RESEARCH_CLARIFICATION and not skip_clarification:
             with function_span("clarification_step") as span:
                 clarification_prompt = CLARIFICATION_PROMPT.format(

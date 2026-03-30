@@ -327,8 +327,8 @@ class TestListDirectory:
         result = sandbox_manager.list_directory(sandbox.id, session_id, "/")
         print(result)
 
-        # .agent, .venv, AGENTS.md, opencode.json, files, outputs, attachments + 2 created files
-        assert len(result) == 9
+        # .agent, .venv, .cache, .home, AGENTS.md, opencode.json, files, outputs, attachments, repos, tmp, downloads + 2 created files
+        assert len(result) == 14
         assert all(isinstance(e, FilesystemEntry) for e in result)
 
 

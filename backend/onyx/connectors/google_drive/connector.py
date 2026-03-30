@@ -100,6 +100,10 @@ SHARED_DRIVE_PAGES_PER_CHECKPOINT = 2
 MY_DRIVE_PAGES_PER_CHECKPOINT = 2
 OAUTH_PAGES_PER_CHECKPOINT = 2
 FOLDERS_PER_CHECKPOINT = 1
+NO_LIST_TEAM_DRIVES_ADMIN_PRIVILEGE = "noListTeamDrivesAdministratorPrivilege"
+NO_LIST_TEAM_DRIVES_ADMIN_MESSAGE = (
+    "does not have the administrator privilege required to list or manage all shared drives"
+)
 
 
 def _extract_str_list_from_comma_str(string: str | None) -> list[str]:
@@ -110,6 +114,18 @@ def _extract_str_list_from_comma_str(string: str | None) -> list[str]:
 
 def _extract_ids_from_urls(urls: list[str]) -> list[str]:
     return [urlparse(url).path.strip("/").split("/")[-1] for url in urls]
+
+
+def _is_shared_drive_admin_listing_error(error: HttpError) -> bool:
+    status_code = error.resp.status if error.resp else None
+    if status_code != 403:
+        return False
+
+    error_text = str(error)
+    return (
+        NO_LIST_TEAM_DRIVES_ADMIN_PRIVILEGE in error_text
+        or NO_LIST_TEAM_DRIVES_ADMIN_MESSAGE in error_text
+    )
 
 
 def _clean_requested_drive_ids(
@@ -709,14 +725,30 @@ class GoogleDriveConnector(
         logger.info(
             f"Getting all drives for user {user_email} with service account: {is_service_account}"
         )
-        all_drive_ids: set[str] = set()
-        for drive in execute_paginated_retrieval(
-            retrieval_function=drive_service.drives().list,
-            list_key="drives",
-            useDomainAdminAccess=is_service_account,
-            fields="drives(id),nextPageToken",
-        ):
-            all_drive_ids.add(drive["id"])
+        def list_drive_ids(use_domain_admin_access: bool) -> set[str]:
+            drive_ids: set[str] = set()
+            for drive in execute_paginated_retrieval(
+                retrieval_function=drive_service.drives().list,
+                list_key="drives",
+                useDomainAdminAccess=use_domain_admin_access,
+                fields="drives(id),nextPageToken",
+            ):
+                drive_ids.add(drive["id"])
+            return drive_ids
+
+        try:
+            all_drive_ids = list_drive_ids(use_domain_admin_access=is_service_account)
+        except HttpError as e:
+            if not (
+                is_service_account and _is_shared_drive_admin_listing_error(e)
+            ):
+                raise
+
+            logger.warning(
+                "User %s is not a Workspace admin. Retrying shared drive listing without domain admin access.",
+                user_email,
+            )
+            all_drive_ids = list_drive_ids(use_domain_admin_access=False)
 
         if not all_drive_ids:
             logger.warning(

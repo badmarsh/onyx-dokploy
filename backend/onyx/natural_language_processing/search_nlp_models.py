@@ -446,7 +446,7 @@ class CloudEmbedding:
                 logger.warning(f"Error closing Google GenAI client: {e}")
 
     async def _embed_litellm_proxy(
-        self, texts: list[str], model_name: str | None
+        self, texts: list[str], model_name: str | None, text_type: EmbedTextType
     ) -> list[Embedding]:
         if not model_name:
             raise ValueError("Model name is required for LiteLLM proxy embedding.")
@@ -457,16 +457,36 @@ class CloudEmbedding:
         headers = (
             {} if not self.api_key else {"Authorization": f"Bearer {self.api_key}"}
         )
+        payload: dict[str, Any] = {
+            "model": model_name,
+            "input": texts,
+        }
 
-        response = await self.http_client.post(
-            self.api_url,
-            json={
-                "model": model_name,
-                "input": texts,
-            },
-            headers=headers,
-        )
-        response.raise_for_status()
+        response = await self.http_client.post(self.api_url, json=payload, headers=headers)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            error_payload = {}
+            try:
+                error_payload = e.response.json()
+            except Exception:
+                pass
+
+            # NVIDIA's embedding NIM requires an explicit text role even though many
+            # OpenAI-compatible proxies do not. Retry once with that field when asked.
+            if (
+                e.response.status_code in {400, 422}
+                and "input_type" in json.dumps(error_payload).lower()
+            ):
+                response = await self.http_client.post(
+                    self.api_url,
+                    json={**payload, "input_type": text_type.value},
+                    headers=headers,
+                )
+                response.raise_for_status()
+            else:
+                raise
+
         result = response.json()
         return [embedding["embedding"] for embedding in result["data"]]
 
@@ -488,7 +508,7 @@ class CloudEmbedding:
             elif self.provider == EmbeddingProvider.AZURE:
                 return await self._embed_azure(texts, f"azure/{deployment_name}")
             elif self.provider == EmbeddingProvider.LITELLM:
-                return await self._embed_litellm_proxy(texts, model_name)
+                return await self._embed_litellm_proxy(texts, model_name, text_type)
 
             embedding_type = EmbeddingModelTextType.get_type(self.provider, text_type)
             if self.provider == EmbeddingProvider.COHERE:
@@ -646,12 +666,49 @@ async def litellm_rerank(
             },
             headers=headers,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            error_payload = {}
+            try:
+                error_payload = e.response.json()
+            except Exception:
+                pass
+
+            error_text = json.dumps(error_payload).lower()
+            if e.response.status_code in {400, 422} and (
+                "passages" in error_text
+                or '"query"' in error_text
+                or "request_validation_error" in error_text
+            ):
+                response = await client.post(
+                    api_url,
+                    json={
+                        "model": model_name,
+                        "query": {"text": query},
+                        "passages": [{"text": doc} for doc in docs],
+                        "truncate": "NONE",
+                    },
+                    headers=headers,
+                )
+                response.raise_for_status()
+            else:
+                raise
+
         result = response.json()
-        return [
-            item["relevance_score"]
-            for item in sorted(result["results"], key=lambda x: x["index"])
-        ]
+        if "results" in result:
+            return [
+                item["relevance_score"]
+                for item in sorted(result["results"], key=lambda x: x["index"])
+            ]
+
+        if "rankings" in result:
+            return [
+                item["logit"]
+                for item in sorted(result["rankings"], key=lambda x: x["index"])
+            ]
+
+        raise ValueError(f"Unsupported rerank response schema: {result}")
 
 
 class EmbeddingModel:

@@ -20,5 +20,5 @@ location ~ ^/mcp(/.*)?$ {
     proxy_redirect off;
     rewrite ^/mcp(/.*)$ $1 break;
     rewrite ^/mcp/?$ / break;
-    proxy_pass http://mcp_server;
+    proxy_pass http://$mcp_server_host:8090;
 }

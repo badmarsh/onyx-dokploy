@@ -16,6 +16,9 @@ from onyx.tools.tool_implementations.python.code_interpreter_client import (
 )
 from onyx.tools.tool_implementations.python.code_interpreter_client import FileInput
 from onyx.tools.tool_implementations.python.code_interpreter_client import (
+    _HEALTH_REQUEST_TIMEOUT_SECONDS,
+)
+from onyx.tools.tool_implementations.python.code_interpreter_client import (
     StreamOutputEvent,
 )
 from onyx.tools.tool_implementations.python.code_interpreter_client import (
@@ -171,3 +174,20 @@ def test_execute_streaming_fallback_preserves_files_param() -> None:
 
     # Should still yield valid events
     assert any(isinstance(e, StreamResultEvent) for e in events)
+
+
+def test_health_uses_extended_timeout() -> None:
+    """Health checks should tolerate the code-interpreter's Docker-backed probe."""
+
+    client = CodeInterpreterClient(base_url="http://fake:9000")
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"status": "ok"}
+    mock_response.raise_for_status = MagicMock()
+
+    with patch.object(client.session, "get", return_value=mock_response) as mock_get:
+        assert client.health() is True
+
+    mock_get.assert_called_once_with(
+        "http://fake:9000/health",
+        timeout=_HEALTH_REQUEST_TIMEOUT_SECONDS,
+    )

@@ -220,12 +220,37 @@ const BuildOutputPanel = memo(({ onClose, isOpen }: BuildOutputPanelProps) => {
     }
   }, [webappInfo?.ready]);
 
+  const normalizeWebappUrl = useCallback(
+    (url: string | null | undefined) => {
+      if (!url) {
+        return null;
+      }
+
+      const proxiedPathMatch = url.match(
+        /\/api\/build\/sessions\/[0-9a-f-]+\/webapp(?:[/?#].*)?$/i
+      );
+      if (proxiedPathMatch) {
+        return proxiedPathMatch[0];
+      }
+
+      if (
+        session?.id &&
+        /https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(?:\/|$)/i.test(url)
+      ) {
+        return `/api/build/sessions/${session.id}/webapp`;
+      }
+
+      return url;
+    },
+    [session?.id]
+  );
+
   // Update cache when SWR returns data for current session
   useEffect(() => {
     if (webappInfo?.webapp_url && session?.id === cachedForSessionId) {
-      setCachedWebappUrl(webappInfo.webapp_url);
+      setCachedWebappUrl(normalizeWebappUrl(webappInfo.webapp_url));
     }
-  }, [webappInfo?.webapp_url, session?.id, cachedForSessionId]);
+  }, [webappInfo?.webapp_url, session?.id, cachedForSessionId, normalizeWebappUrl]);
 
   // Refresh when web/ file changes or after restore
   // webappNeedsRefresh is a counter that increments on each edit/restore,
@@ -236,11 +261,11 @@ const BuildOutputPanel = memo(({ onClose, isOpen }: BuildOutputPanelProps) => {
     }
   }, [webappNeedsRefresh, isFullyOpen, mutate, session?.id]);
 
-  const webappUrl = webappInfo?.webapp_url ?? null;
+  const webappUrl = normalizeWebappUrl(webappInfo?.webapp_url ?? null);
 
   // Use cache only if it belongs to current session
   const validCachedUrl =
-    cachedForSessionId === session?.id ? cachedWebappUrl : null;
+    cachedForSessionId === session?.id ? normalizeWebappUrl(cachedWebappUrl) : null;
   const displayUrl = webappUrl ?? validCachedUrl;
 
   // Tab navigation history

@@ -1008,39 +1008,43 @@ def monitor_process_memory(self: Task, *, tenant_id: str) -> None:  # noqa: ARG0
         # Get all supervisor-managed processes
         supervisor_processes: dict[int, str] = {}
 
-        # Map cmd line elements to more readable process names
-        process_type_mapping = {
-            "--hostname=primary": "primary",
-            "--hostname=light": "light",
-            "--hostname=heavy": "heavy",
-            "--hostname=indexing": "indexing",
-            "--hostname=monitoring": "monitoring",
-            "beat": "beat",
-            "slack/listener.py": "slack",
+        # Match only the actual supervisor-managed worker commands.
+        # Avoid broad substrings like "beat" which also match the log tailer and watchdog.
+        process_patterns = {
+            "beat": "versioned_apps.beat beat",
+            "docfetching": "versioned_apps.docfetching worker --loglevel=INFO --hostname=docfetching@",
+            "docprocessing": "versioned_apps.docprocessing worker --loglevel=INFO --hostname=docprocessing@",
+            "heavy": "versioned_apps.heavy worker --loglevel=INFO --hostname=heavy@",
+            "light": "versioned_apps.light worker --loglevel=INFO --hostname=light@",
+            "monitoring": "versioned_apps.monitoring worker --loglevel=INFO --hostname=monitoring@",
+            "primary": "versioned_apps.primary worker --loglevel=INFO --hostname=primary@",
+            "user_file_processing": "versioned_apps.user_file_processing worker --loglevel=INFO --hostname=user_file_processing@",
+            "slack": "onyx/onyxbot/slack/listener.py",
         }
 
-        # Find all python processes that are likely celery workers
         for proc in psutil.process_iter():
             cmdline = _get_cmdline_for_process(proc)
             if not cmdline:
                 continue
 
-            # Match supervisor-managed processes
-            for process_name, process_type in process_type_mapping.items():
-                if process_name in cmdline:
-                    if process_type in supervisor_processes.values():
-                        task_logger.error(
-                            f"Duplicate process type for type {process_type} with cmd {cmdline} with pid={proc.pid}."
-                        )
-                        continue
+            for process_type, pattern in process_patterns.items():
+                if pattern not in cmdline:
+                    continue
 
-                    supervisor_processes[proc.pid] = process_type
-                    break
+                if process_type in supervisor_processes.values():
+                    task_logger.error(
+                        f"Duplicate process type for type {process_type} with cmd {cmdline} with pid={proc.pid}."
+                    )
+                    continue
 
-        if len(supervisor_processes) != len(process_type_mapping):
-            task_logger.error(
-                f"Missing processes: {set(process_type_mapping.keys()).symmetric_difference(supervisor_processes.values())}"
-            )
+                supervisor_processes[proc.pid] = process_type
+                break
+
+        expected_process_types = set(process_patterns.keys())
+        found_process_types = set(supervisor_processes.values())
+        missing_processes = expected_process_types - found_process_types
+        if missing_processes:
+            task_logger.error(f"Missing processes: {missing_processes}")
 
         # Log memory usage for each process
         for pid, process_type in supervisor_processes.items():

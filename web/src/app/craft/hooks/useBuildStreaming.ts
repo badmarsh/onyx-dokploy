@@ -319,7 +319,7 @@ export function useBuildStreaming() {
                 fetchSession(sessionId)
                   .then((sessionData) => {
                     if (sessionData.sandbox?.nextjs_port) {
-                      const webappUrl = `http://localhost:${sessionData.sandbox.nextjs_port}`;
+                      const webappUrl = `/api/build/sessions/${sessionId}/webapp`;
                       updateSessionData(sessionId, { webappUrl });
                     }
                   })

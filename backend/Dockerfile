@@ -10,18 +10,21 @@ founders@onyx.app for more information. Please visit https://github.com/onyx-dot
 # Build argument for Craft support (disabled by default)
 # Use --build-arg ENABLE_CRAFT=true to include Node.js and opencode CLI
 ARG ENABLE_CRAFT=false
+ARG ENABLE_CRAFT_DOCKER=false
 
 # DO_NOT_TRACK is used to disable telemetry for Unstructured
 ENV DANSWER_RUNNING_IN_DOCKER="true" \
     DO_NOT_TRACK="true" \
-    PLAYWRIGHT_BROWSERS_PATH="/app/.cache/ms-playwright"
+    PLAYWRIGHT_BROWSERS_PATH="/app/.cache/ms-playwright" \
+    CRAFT_NPM_CACHE_DIR="/var/cache/onyx-craft/npm" \
+    CRAFT_PIP_CACHE_DIR="/var/cache/onyx-craft/pip"
 
 # Create non-root user for security best practices
 RUN groupadd -g 1001 onyx && \
     useradd -u 1001 -g onyx -m -s /bin/bash onyx && \
-    mkdir -p /var/log/onyx && \
+    mkdir -p /var/log/onyx /var/cache/onyx-craft/npm /var/cache/onyx-craft/pip && \
     chmod 755 /var/log/onyx && \
-    chown onyx:onyx /var/log/onyx
+    chown -R onyx:onyx /var/log/onyx /var/cache/onyx-craft
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.9 /uv /uvx /bin/
 
@@ -54,12 +57,41 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean
 
-# Conditionally install Node.js 20 for Craft (required for Next.js)
-# Only installed when ENABLE_CRAFT=true
+# Conditionally install Node.js 20 and extra Craft tooling when ENABLE_CRAFT=true.
+# These CLIs give Craft stronger built-in support for code search, data wrangling,
+# document/media conversion, and git-backed workflows in local sandbox mode.
 RUN if [ "$ENABLE_CRAFT" = "true" ]; then \
-        echo "Installing Node.js 20 for Craft support..." && \
+        echo "Installing Node.js 20 and Craft runtime tooling..." && \
         curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-        apt-get install -y nodejs && \
+        apt-get install -y --no-install-recommends \
+            nodejs \
+            fd-find \
+            ffmpeg \
+            git \
+            imagemagick \
+            jq \
+            pandoc \
+            poppler-utils \
+            ripgrep \
+            sqlite3 \
+            tesseract-ocr && \
+        ln -sf /usr/bin/fdfind /usr/local/bin/fd && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# Optionally install Docker CLI + Compose plugin for Craft.
+# This allows the local sandbox agent to control the host Docker daemon via
+# /var/run/docker.sock when the socket is mounted into api_server.
+RUN if [ "$ENABLE_CRAFT_DOCKER" = "true" ]; then \
+        echo "Installing Docker CLI for Craft support..." && \
+        install -m 0755 -d /etc/apt/keyrings && \
+        curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+        chmod a+r /etc/apt/keyrings/docker.asc && \
+        . /etc/os-release && \
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" \
+            > /etc/apt/sources.list.d/docker.list && \
+        apt-get update && \
+        apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin && \
         rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -104,6 +136,21 @@ RUN uv pip install --system --no-cache-dir --upgrade \
         libxmlsec1-openssl \
         # Install postgresql-client for easy manual tests
         postgresql-client && \
+    if [ "$ENABLE_CRAFT" = "true" ]; then \
+        apt-get install -y --no-install-recommends \
+            curl \
+            fd-find \
+            ffmpeg \
+            git \
+            imagemagick \
+            jq \
+            pandoc \
+            poppler-utils \
+            ripgrep \
+            sqlite3 \
+            tesseract-ocr && \
+        ln -sf /usr/bin/fdfind /usr/local/bin/fd; \
+    fi && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/* && \
     rm -rf ~/.cache/uv /tmp/*.txt && \

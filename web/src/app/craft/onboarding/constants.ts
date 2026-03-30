@@ -10,9 +10,13 @@ export interface BuildLlmSelection {
 
 // Priority order for smart default LLM selection
 const LLM_SELECTION_PRIORITY = [
-  { provider: "anthropic", modelName: "claude-opus-4-6" },
-  { provider: "openai", modelName: "gpt-5.2" },
-  { provider: "openrouter", modelName: "minimax/minimax-m2.1" },
+  {
+    provider: "litellm_proxy",
+    modelName: "qwen/qwen3-coder-480b-a35b-instruct",
+  },
+  { provider: "openrouter", modelName: "openai/gpt-5.4" },
+  { provider: "openrouter", modelName: "anthropic/claude-opus-4.6" },
+  { provider: "ollama_chat", modelName: "llama3.2:3b" },
 ] as const;
 
 // Minimal provider interface for selection logic
@@ -34,7 +38,10 @@ export function getDefaultLlmSelection(
   // Try each priority provider in order
   for (const { provider, modelName } of LLM_SELECTION_PRIORITY) {
     const matchingProvider = llmProviders.find((p) => p.provider === provider);
-    if (matchingProvider) {
+    const matchingModel = matchingProvider?.model_configurations.find(
+      (model) => model.name === modelName && model.is_visible
+    );
+    if (matchingProvider && matchingModel) {
       return {
         providerName: matchingProvider.name,
         provider: matchingProvider.provider,
@@ -62,15 +69,16 @@ export function getDefaultLlmSelection(
 // Recommended models config (for UI display)
 export const RECOMMENDED_BUILD_MODELS = {
   preferred: {
-    provider: "anthropic",
-    modelName: "claude-opus-4-6",
-    displayName: "Claude Opus 4.6",
+    provider: "litellm_proxy",
+    modelName: "qwen/qwen3-coder-480b-a35b-instruct",
+    displayName: "Qwen3 Coder 480B",
   },
   alternatives: [
-    { provider: "anthropic", modelName: "claude-sonnet-4-6" },
-    { provider: "openai", modelName: "gpt-5.2" },
-    { provider: "openai", modelName: "gpt-5.1-codex" },
-    { provider: "openrouter", modelName: "minimax/minimax-m2.1" },
+    { provider: "litellm_proxy", modelName: "moonshotai/kimi-k2.5" },
+    { provider: "openrouter", modelName: "openai/gpt-5.4" },
+    { provider: "openrouter", modelName: "anthropic/claude-opus-4.6" },
+    { provider: "openrouter", modelName: "qwen/qwen3-coder-plus" },
+    { provider: "ollama_chat", modelName: "llama3.2:3b" },
   ],
 } as const;
 
@@ -143,10 +151,43 @@ export interface BuildModeProvider {
 
 export const BUILD_MODE_PROVIDERS: BuildModeProvider[] = [
   {
+    key: "nvidia",
+    label: "NVIDIA",
+    providerName: "litellm_proxy",
+    recommended: true,
+    models: [
+      {
+        name: "qwen/qwen3-coder-480b-a35b-instruct",
+        label: "Qwen3 Coder 480B",
+        recommended: true,
+      },
+      { name: "moonshotai/kimi-k2.5", label: "Kimi K2.5" },
+      { name: "deepseek-ai/deepseek-v3.2", label: "DeepSeek V3.2" },
+      { name: "openai/gpt-oss-120b", label: "GPT-OSS 120B" },
+    ],
+  },
+  {
+    key: "openrouter",
+    label: "OpenRouter",
+    providerName: "openrouter",
+    models: [
+      { name: "openai/gpt-5.4", label: "GPT-5.4", recommended: true },
+      { name: "anthropic/claude-opus-4.6", label: "Claude Opus 4.6" },
+      { name: "qwen/qwen3-coder-plus", label: "Qwen3 Coder Plus" },
+      { name: "moonshotai/kimi-k2.5", label: "Kimi K2.5" },
+      {
+        name: "google/gemini-3.1-pro-preview",
+        label: "Gemini 3.1 Pro Preview",
+      },
+    ],
+    apiKeyPlaceholder: "sk-or-...",
+    apiKeyUrl: "https://openrouter.ai/keys",
+    apiKeyLabel: "OpenRouter Dashboard",
+  },
+  {
     key: "anthropic",
     label: "Anthropic",
     providerName: "anthropic",
-    recommended: true,
     models: [
       { name: "claude-opus-4-6", label: "Claude Opus 4.6", recommended: true },
       { name: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
@@ -168,19 +209,13 @@ export const BUILD_MODE_PROVIDERS: BuildModeProvider[] = [
     apiKeyLabel: "OpenAI Dashboard",
   },
   {
-    key: "openrouter",
-    label: "OpenRouter",
-    providerName: "openrouter",
+    key: "ollama",
+    label: "Ollama",
+    providerName: "ollama_chat",
     models: [
-      {
-        name: "minimax/minimax-m2.1",
-        label: "MiniMax M2.1",
-        recommended: true,
-      },
+      { name: "llama3.2:3b", label: "Llama 3.2 3B", recommended: true },
+      { name: "smollm:135m", label: "SmolLM 135M" },
     ],
-    apiKeyPlaceholder: "sk-or-...",
-    apiKeyUrl: "https://openrouter.ai/keys",
-    apiKeyLabel: "OpenRouter Dashboard",
   },
 ];
 

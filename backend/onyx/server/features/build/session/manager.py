@@ -25,7 +25,6 @@ from acp.schema import ToolCallProgress
 from acp.schema import ToolCallStart
 from sqlalchemy.orm import Session as DBSession
 
-from onyx.configs.app_configs import WEB_DOMAIN
 from onyx.configs.constants import MessageType
 from onyx.db.enums import SandboxStatus
 from onyx.db.llm import fetch_default_llm_model
@@ -1798,7 +1797,7 @@ class SessionManager:
         webapp_url = None
         ready = False
         if session.nextjs_port:
-            webapp_url = f"{WEB_DOMAIN}/api/build/sessions/{session_id}/webapp"
+            webapp_url = f"/api/build/sessions/{session_id}/webapp"
 
             # Quick health check: can the API server reach the NextJS dev server?
             ready = self._check_nextjs_ready(sandbox.id, session.nextjs_port)

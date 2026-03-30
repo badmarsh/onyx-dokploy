@@ -1244,7 +1244,7 @@ export const useBuildSessionStore = create<BuildSessionStore>()((set, get) => ({
         (a) => a.type === "nextjs_app" || a.type === "web_app"
       );
       if (hasWebapp && sessionData.sandbox?.nextjs_port) {
-        webappUrl = `http://localhost:${sessionData.sandbox.nextjs_port}`;
+        webappUrl = `/api/build/sessions/${sessionId}/webapp`;
       }
 
       const status = isStreaming

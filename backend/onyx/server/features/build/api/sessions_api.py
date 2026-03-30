@@ -1,5 +1,6 @@
 """API endpoints for Build Mode session management."""
 
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -36,6 +37,7 @@ from onyx.server.features.build.api.models import SuggestionBubble
 from onyx.server.features.build.api.models import SuggestionTheme
 from onyx.server.features.build.api.models import UploadResponse
 from onyx.server.features.build.api.models import WebappInfo
+from onyx.server.features.build.configs import PERSISTENT_DOCUMENT_STORAGE_PATH
 from onyx.server.features.build.configs import SANDBOX_BACKEND
 from onyx.server.features.build.configs import SandboxBackend
 from onyx.server.features.build.db.build_session import allocate_nextjs_port
@@ -46,6 +48,9 @@ from onyx.server.features.build.db.sandbox import get_sandbox_by_user_id
 from onyx.server.features.build.db.sandbox import update_sandbox_heartbeat
 from onyx.server.features.build.db.sandbox import update_sandbox_status__no_commit
 from onyx.server.features.build.sandbox import get_sandbox_manager
+from onyx.server.features.build.sandbox.tasks.tasks import (
+    _get_disabled_user_library_paths,
+)
 from onyx.server.features.build.session.manager import SessionManager
 from onyx.server.features.build.session.manager import UploadLimitExceededError
 from onyx.server.features.build.utils import sanitize_filename
@@ -492,12 +497,36 @@ def restore_session(
                         db_session.commit()
                         raise
                 else:
+                    excluded_user_library_paths: list[str] | None = None
+                    user_file_system_path: str | None = None
+                    if not session.demo_data_enabled:
+                        excluded_user_library_paths = (
+                            _get_disabled_user_library_paths(
+                                db_session, str(user.id)
+                            )
+                        )
+                        user_file_system_path = str(
+                            Path(PERSISTENT_DOCUMENT_STORAGE_PATH)
+                            / tenant_id
+                            / "knowledge"
+                            / str(user.id)
+                        )
+                        if SANDBOX_BACKEND == SandboxBackend.LOCAL:
+                            Path(user_file_system_path).mkdir(
+                                parents=True, exist_ok=True
+                            )
+
                     # No snapshot - set up fresh workspace
                     sandbox_manager.setup_session_workspace(
                         sandbox_id=sandbox.id,
                         session_id=session_id,
                         llm_config=llm_config,
                         nextjs_port=session.nextjs_port,
+                        file_system_path=user_file_system_path,
+                        user_name=user.personal_name,
+                        user_role=user.personal_role,
+                        use_demo_data=session.demo_data_enabled,
+                        excluded_user_library_paths=excluded_user_library_paths,
                     )
                     session.status = BuildSessionStatus.ACTIVE
                     db_session.commit()

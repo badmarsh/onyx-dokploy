@@ -348,7 +348,7 @@ class LocalSandboxManager(SandboxManager):
                 self._stop_nextjs_process(process, session_id)
                 with self._nextjs_lock:
                     self._nextjs_processes.pop(key, None)
-            except Exception as e:
+            except Exception:
                 logger.warning(
                     f"Failed to stop Next.js for sandbox {sandbox_id}, session {session_id}: {e}"
                 )
@@ -793,11 +793,33 @@ class LocalSandboxManager(SandboxManager):
             nextjs_port: The port number for the Next.js server
         """
         process_key = (sandbox_id, session_id)
+        server_url = f"http://localhost:{nextjs_port}"
 
         with self._nextjs_lock:
             existing = self._nextjs_processes.get(process_key)
-            if existing is not None and existing.poll() is None:
-                return
+        if existing is not None and existing.poll() is None:
+            try:
+                with httpx.Client(timeout=1.0) as client:
+                    response = client.get(server_url)
+                if response.status_code == 200:
+                    return
+                logger.warning(
+                    "Tracked Next.js process for session %s on port %s returned HTTP %s; restarting",
+                    session_id,
+                    nextjs_port,
+                    response.status_code,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Tracked Next.js process for session %s on port %s is unhealthy: %s; restarting",
+                    session_id,
+                    nextjs_port,
+                    type(e).__name__,
+                )
+
+            self._stop_nextjs_process(existing, session_id)
+            with self._nextjs_lock:
+                self._nextjs_processes.pop(process_key, None)
 
         # Atomic check-and-add: returns True if already in set (another thread is starting)
         if self._nextjs_starting.check_and_add(process_key):
@@ -808,13 +830,28 @@ class LocalSandboxManager(SandboxManager):
                 # Port check in background to avoid blocking the main thread
                 try:
                     with httpx.Client(timeout=1.0) as client:
-                        client.get(f"http://localhost:{nextjs_port}")
-                    logger.info(
-                        f"Port {nextjs_port} already alive for session {session_id} (orphan process) — skipping restart"
+                        response = client.get(server_url)
+                    if response.status_code == 200:
+                        logger.info(
+                            f"Port {nextjs_port} already alive for session {session_id} (orphan process) — skipping restart"
+                        )
+                        return
+
+                    logger.warning(
+                        "Port %s responded with HTTP %s for session %s; stopping orphan before restart",
+                        nextjs_port,
+                        response.status_code,
+                        session_id,
                     )
-                    return
-                except Exception:
-                    pass  # Port is dead; proceed with restart
+                    self._stop_nextjs_server_on_port(nextjs_port, session_id)
+                except Exception as e:
+                    logger.warning(
+                        "Port %s is unhealthy for session %s (%s); stopping orphan before restart",
+                        nextjs_port,
+                        session_id,
+                        type(e).__name__,
+                    )
+                    self._stop_nextjs_server_on_port(nextjs_port, session_id)
 
                 logger.info(
                     f"Starting Next.js for session {session_id} on port {nextjs_port}"

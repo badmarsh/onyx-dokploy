@@ -34,9 +34,19 @@ def temp_templates(temp_base_path: Path) -> dict[str, Path]:
 
     outputs_template = templates_dir / "outputs"
     outputs_template.mkdir()
+    web_dir = outputs_template / "web"
+    web_dir.mkdir()
+    (web_dir / "package.json").write_text('{"name": "test-web"}')
+    (web_dir / "app.tsx").write_text("export default function App() { return null; }\n")
+    node_modules = web_dir / "node_modules"
+    node_modules.mkdir()
+    (node_modules / "shared.js").write_text("module.exports = {};\n")
 
     venv_template = templates_dir / "venv"
     venv_template.mkdir()
+    template_site_packages = venv_template / "lib" / "python3.11" / "site-packages"
+    template_site_packages.mkdir(parents=True)
+    (template_site_packages / "template_pkg.py").write_text("VALUE = 1\n")
 
     skills_path = templates_dir / "skills"
     skills_path.mkdir()
@@ -64,6 +74,26 @@ def directory_manager(
         skills_path=temp_templates["skills"],
         agent_instructions_template_path=temp_templates["agent_instructions"],
     )
+
+
+
+class TestSessionWorkspaceDirectories:
+    """Tests for session workspace scaffolding."""
+
+    def test_create_session_directory_creates_workspace_dirs(
+        self,
+        directory_manager: DirectoryManager,
+    ) -> None:
+        """Session roots should include dedicated working directories."""
+        sandbox_path = directory_manager.create_sandbox_directory("test_session_dirs")
+
+        session_path = directory_manager.create_session_directory(
+            sandbox_path=sandbox_path,
+            session_id="session_with_dirs",
+        )
+
+        for directory_name in ("repos", "tmp", "downloads", ".cache", ".home"):
+            assert (session_path / directory_name).is_dir()
 
 
 class TestSetupOpencodeConfig:
@@ -336,10 +366,14 @@ class TestSetupOpencodeConfig:
         assert config["permission"]["webfetch"] == "deny"
 
         # Verify default permissions are still present
-        assert config["permission"]["read"] == "allow"
-        assert config["permission"]["write"] == "allow"
-        assert config["permission"]["edit"] == "allow"
-        assert config["permission"]["grep"] == "allow"
+        assert config["permission"]["read"]["*"] == "allow"
+        assert config["permission"]["write"]["*"] == "allow"
+        assert config["permission"]["edit"]["*"] == "allow"
+        assert config["permission"]["grep"]["*"] == "allow"
+        assert config["permission"]["read"]["opencode.json"] == "deny"
+        assert config["permission"]["write"]["opencode.json"] == "deny"
+        assert config["permission"]["edit"]["opencode.json"] == "deny"
+        assert config["permission"]["grep"]["opencode.json"] == "deny"
         assert "bash" in config["permission"]
         assert config["permission"]["bash"]["rm"] == "deny"
 
@@ -348,6 +382,41 @@ class TestSetupOpencodeConfig:
         model_options = config["provider"]["openai"]["models"]["gpt-4o"]["options"]
         assert model_options["reasoningEffort"] == "high"
 
+
+
+    def test_external_directory_allowlist_includes_persistent_storage(
+        self,
+        directory_manager: DirectoryManager,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_base_path: Path,  # noqa: ARG002
+    ) -> None:
+        """Default external directory rules should allow the knowledge store and configured extras."""
+        monkeypatch.setenv("PERSISTENT_DOCUMENT_STORAGE_PATH", "/app/file-system")
+        monkeypatch.setenv(
+            "OPENCODE_ALLOWED_EXTERNAL_DIRECTORIES",
+            "/tmp/gcode,/tmp/agent-ui",
+        )
+
+        sandbox_path = directory_manager.create_sandbox_directory(
+            "test_external_directory_allowlist"
+        )
+        directory_manager.setup_opencode_config(
+            sandbox_path=sandbox_path,
+            provider="openai",
+            model_name="gpt-4o",
+        )
+
+        config_path = sandbox_path / "opencode.json"
+        config = json.loads(config_path.read_text())
+        permissions = config["permission"]["external_directory"]
+
+        assert permissions["*"] == "deny"
+        assert permissions["/app/file-system"] == "allow"
+        assert permissions["/app/file-system/**"] == "allow"
+        assert permissions["/tmp/gcode"] == "allow"
+        assert permissions["/tmp/gcode/**"] == "allow"
+        assert permissions["/tmp/agent-ui"] == "allow"
+        assert permissions["/tmp/agent-ui/**"] == "allow"
     def test_config_without_api_key(
         self,
         directory_manager: DirectoryManager,
@@ -642,6 +711,43 @@ class TestSandboxDirectoryStructure:
             "options"
         ]
         assert model_options["thinking"]["type"] == "enabled"
+
+    def test_setup_outputs_directory_symlinks_node_modules(
+        self,
+        directory_manager: DirectoryManager,
+    ) -> None:
+        """Test outputs setup keeps shared node_modules as a symlink."""
+        sandbox_path = directory_manager.create_sandbox_directory("test_outputs")
+
+        directory_manager.setup_outputs_directory(sandbox_path)
+
+        node_modules_path = sandbox_path / "outputs" / "web" / "node_modules"
+        assert node_modules_path.is_symlink()
+        assert node_modules_path.resolve() == (
+            directory_manager._outputs_template_path / "web" / "node_modules"
+        )
+        assert (sandbox_path / "outputs" / "web" / "app.tsx").read_text() == (
+            "export default function App() { return null; }\n"
+        )
+
+    def test_setup_venv_creates_shared_template_overlay(
+        self,
+        directory_manager: DirectoryManager,
+    ) -> None:
+        """Test session venv references template site-packages via .pth file."""
+        sandbox_path = directory_manager.create_sandbox_directory("test_venv")
+
+        venv_path = directory_manager.setup_venv(sandbox_path)
+        site_packages = directory_manager._find_site_packages_path(venv_path)
+
+        assert site_packages is not None
+        shared_packages_path = site_packages / "_onyx_shared_template.pth"
+        assert shared_packages_path.exists()
+        assert shared_packages_path.read_text().strip() == str(
+            directory_manager._find_site_packages_path(
+                directory_manager._venv_template_path
+            )
+        )
 
     def test_setup_skills_copies_and_overwrites(
         self,

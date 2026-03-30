@@ -16,6 +16,7 @@ from onyx.utils.logger import setup_logger
 logger = setup_logger()
 
 _HEALTH_CACHE_TTL_SECONDS = 30
+_HEALTH_REQUEST_TIMEOUT_SECONDS = 20
 _health_cache: dict[str, tuple[float, bool]] = {}
 
 
@@ -134,7 +135,11 @@ class CodeInterpreterClient:
 
         url = f"{self.base_url}/health"
         try:
-            response = self.session.get(url, timeout=5)
+            # The code-interpreter health endpoint performs Docker-backed checks
+            # and can legitimately take longer than a generic HTTP probe.
+            response = self.session.get(
+                url, timeout=_HEALTH_REQUEST_TIMEOUT_SECONDS
+            )
             response.raise_for_status()
             result = response.json().get("status") == "ok"
         except Exception as e:
