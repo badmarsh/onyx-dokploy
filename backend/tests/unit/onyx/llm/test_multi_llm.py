@@ -1436,7 +1436,9 @@ def test_no_tool_choice_sent_when_no_tools(default_multi_llm: LitellmLLM) -> Non
     """Regression test for providers (e.g. Fireworks) that reject tool_choice=null.
 
     When no tools are provided, tool_choice must not be forwarded to
-    litellm.completion() at all — not even as None.
+    litellm.completion() at all — not even as None. We also must not
+    whitelist the param via allowed_openai_params, otherwise some LiteLLM
+    proxy providers still emit tool_choice: null in the upstream request.
     """
     messages: LanguageModelInput = [UserMessage(content="Hello!")]
 
@@ -1463,6 +1465,9 @@ def test_no_tool_choice_sent_when_no_tools(default_multi_llm: LitellmLLM) -> Non
         assert (
             "tool_choice" not in kwargs
         ), "tool_choice must not be sent to providers when no tools are provided"
+        assert (
+            "allowed_openai_params" not in kwargs
+        ), "tool_choice must not be whitelisted when no tools are provided"
 
 
 def test_bifrost_normalizes_api_base_in_model_kwargs() -> None:
