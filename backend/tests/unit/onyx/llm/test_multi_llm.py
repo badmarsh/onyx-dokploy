@@ -22,6 +22,7 @@ from onyx.llm.models import FunctionCall
 from onyx.llm.models import LanguageModelInput
 from onyx.llm.models import ReasoningEffort
 from onyx.llm.models import ToolCall
+from onyx.llm.models import ToolChoiceOptions
 from onyx.llm.models import UserMessage
 from onyx.llm.multi_llm import LitellmLLM
 from onyx.llm.utils import get_max_input_tokens
@@ -1468,6 +1469,113 @@ def test_no_tool_choice_sent_when_no_tools(default_multi_llm: LitellmLLM) -> Non
         assert (
             "allowed_openai_params" not in kwargs
         ), "tool_choice must not be whitelisted when no tools are provided"
+
+
+def test_openrouter_retries_without_tools_when_route_lacks_tool_support() -> None:
+    llm = LitellmLLM(
+        api_key="test_key",
+        timeout=30,
+        model_provider=LlmProviderNames.OPENROUTER,
+        model_name="cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+        max_input_tokens=32000,
+    )
+
+    messages: LanguageModelInput = [UserMessage(content="Say hello")]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    mock_stream_chunks = [
+        litellm.ModelResponse(
+            id="chatcmpl-123",
+            choices=[
+                litellm.Choices(
+                    delta=_create_delta(role="assistant", content="Hello"),
+                    finish_reason="stop",
+                    index=0,
+                )
+            ],
+            model="dolphin-mistral-24b",
+        ),
+    ]
+
+    with patch("litellm.completion") as mock_completion:
+        mock_completion.side_effect = [
+            Exception("No endpoints found that support tool use"),
+            mock_stream_chunks,
+        ]
+
+        result = llm.invoke(
+            messages,
+            tools=tools,
+            tool_choice=ToolChoiceOptions.AUTO,
+        )
+
+        assert result.choice.message.content == "Hello"
+        assert mock_completion.call_count == 2
+
+        first_call = mock_completion.call_args_list[0].kwargs
+        second_call = mock_completion.call_args_list[1].kwargs
+
+        assert first_call["tools"] == tools
+        assert first_call["tool_choice"] == ToolChoiceOptions.AUTO
+        assert first_call["parallel_tool_calls"] is True
+        assert first_call["allowed_openai_params"] == ["tool_choice"]
+
+        assert second_call["tools"] is None
+        assert "tool_choice" not in second_call
+        assert "parallel_tool_calls" not in second_call
+        assert "allowed_openai_params" not in second_call
+
+
+def test_openrouter_does_not_retry_without_tools_when_tool_use_is_required() -> None:
+    llm = LitellmLLM(
+        api_key="test_key",
+        timeout=30,
+        model_provider=LlmProviderNames.OPENROUTER,
+        model_name="cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+        max_input_tokens=32000,
+    )
+
+    messages: LanguageModelInput = [UserMessage(content="Use a tool")]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    with patch("litellm.completion") as mock_completion:
+        mock_completion.side_effect = Exception(
+            "No endpoints found that support tool use"
+        )
+
+        with pytest.raises(Exception, match="support tool use"):
+            llm.invoke(
+                messages,
+                tools=tools,
+                tool_choice=ToolChoiceOptions.REQUIRED,
+            )
+
+        assert mock_completion.call_count == 1
 
 
 def test_bifrost_normalizes_api_base_in_model_kwargs() -> None:

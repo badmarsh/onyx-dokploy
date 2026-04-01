@@ -200,6 +200,53 @@ def _prompt_contains_tool_call_history(prompt: LanguageModelInput) -> bool:
     return any(isinstance(msg, AssistantMessage) and msg.tool_calls for msg in msgs)
 
 
+def _exception_chain_contains(error: Exception, text: str) -> bool:
+    """Check whether an exception or its causes contain a specific text."""
+    visited: set[int] = set()
+    current: Exception | None = error
+    needle = text.lower()
+
+    for _ in range(100):
+        if current is None or id(current) in visited:
+            return False
+
+        visited.add(id(current))
+        if needle in str(current).lower():
+            return True
+
+        cause = getattr(current, "__cause__", None)
+        if isinstance(cause, Exception):
+            current = cause
+            continue
+
+        if (
+            hasattr(current, "args")
+            and len(getattr(current, "args")) == 1
+            and isinstance(current.args[0], Exception)
+        ):
+            current = current.args[0]
+            continue
+
+        return False
+
+    return False
+
+
+def _should_retry_openrouter_without_tools(
+    error: Exception,
+    model_provider: str,
+    tools: list[dict] | None,
+    tool_choice: ToolChoiceOptions | None,
+) -> bool:
+    """Retry OpenRouter once without tools when the chosen route lacks tool support."""
+    return bool(
+        tools
+        and model_provider == LlmProviderNames.OPENROUTER
+        and tool_choice != ToolChoiceOptions.REQUIRED
+        and _exception_chain_contains(error, "No endpoints found that support tool use")
+    )
+
+
 def _is_vertex_model_rejecting_output_config(model_name: str) -> bool:
     normalized_model_name = model_name.lower()
     return any(
@@ -581,22 +628,65 @@ class LitellmLLM(LLM):
                 if tools and tool_choice is not None:
                     optional_kwargs["tool_choice"] = tool_choice
 
-                response = litellm.completion(
-                    mock_response=get_llm_mock_response() or MOCK_LLM_RESPONSE,
-                    model=model,
-                    base_url=self._api_base or None,
-                    api_version=self._api_version or None,
-                    custom_llm_provider=self._custom_llm_provider or None,
-                    messages=messages,
-                    tools=tools,
-                    stream=stream,
-                    temperature=temperature,
-                    timeout=timeout_override or self._timeout,
-                    max_tokens=max_tokens,
-                    client=client,
-                    **optional_kwargs,
-                    **passthrough_kwargs,
-                )
+                try:
+                    response = litellm.completion(
+                        mock_response=get_llm_mock_response() or MOCK_LLM_RESPONSE,
+                        model=model,
+                        base_url=self._api_base or None,
+                        api_version=self._api_version or None,
+                        custom_llm_provider=self._custom_llm_provider or None,
+                        messages=messages,
+                        tools=tools,
+                        stream=stream,
+                        temperature=temperature,
+                        timeout=timeout_override or self._timeout,
+                        max_tokens=max_tokens,
+                        client=client,
+                        **optional_kwargs,
+                        **passthrough_kwargs,
+                    )
+                except Exception as e:
+                    if not _should_retry_openrouter_without_tools(
+                        error=e,
+                        model_provider=self._model_provider,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                    ):
+                        raise
+
+                    logger.warning(
+                        "Retrying OpenRouter request without tools because the selected route "
+                        "does not support tool use. model=%s",
+                        self.config.model_name,
+                    )
+
+                    retry_kwargs = {
+                        key: value
+                        for key, value in optional_kwargs.items()
+                        if key
+                        not in {
+                            "allowed_openai_params",
+                            "parallel_tool_calls",
+                            "tool_choice",
+                        }
+                    }
+
+                    response = litellm.completion(
+                        mock_response=get_llm_mock_response() or MOCK_LLM_RESPONSE,
+                        model=model,
+                        base_url=self._api_base or None,
+                        api_version=self._api_version or None,
+                        custom_llm_provider=self._custom_llm_provider or None,
+                        messages=messages,
+                        tools=None,
+                        stream=stream,
+                        temperature=temperature,
+                        timeout=timeout_override or self._timeout,
+                        max_tokens=max_tokens,
+                        client=client,
+                        **retry_kwargs,
+                        **passthrough_kwargs,
+                    )
             return response
         except Exception as e:
             # for break pointing
