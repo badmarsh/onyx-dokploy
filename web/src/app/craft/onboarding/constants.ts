@@ -22,6 +22,55 @@ interface MinimalLlmProvider {
   model_configurations: { name: string; is_visible: boolean }[];
 }
 
+function getVisibleModels(provider: MinimalLlmProvider) {
+  return provider.model_configurations.filter((model) => model.is_visible);
+}
+
+function buildSelection(
+  provider: MinimalLlmProvider,
+  preferredModelName?: string
+): BuildLlmSelection | null {
+  const visibleModels = getVisibleModels(provider);
+  if (visibleModels.length === 0) {
+    return null;
+  }
+
+  const selectedModel = preferredModelName
+    ? visibleModels.find((model) => model.name === preferredModelName) ||
+      visibleModels[0]
+    : visibleModels[0];
+
+  if (!selectedModel) {
+    return null;
+  }
+
+  return {
+    providerName: provider.name,
+    provider: provider.provider,
+    modelName: selectedModel.name,
+  };
+}
+
+export function isBuildLlmSelectionValid(
+  selection: BuildLlmSelection | null,
+  llmProviders: MinimalLlmProvider[] | undefined
+): boolean {
+  if (!selection || !llmProviders) {
+    return false;
+  }
+
+  const matchingProvider = llmProviders.find(
+    (provider) => provider.name === selection.providerName
+  );
+  if (!matchingProvider) {
+    return false;
+  }
+
+  return matchingProvider.model_configurations.some(
+    (model) => model.is_visible && model.name === selection.modelName
+  );
+}
+
 /**
  * Get the best default LLM selection based on available providers.
  * Priority: Anthropic > OpenAI > OpenRouter > first available
@@ -33,30 +82,31 @@ export function getDefaultLlmSelection(
 
   // Try each priority provider in order
   for (const { provider, modelName } of LLM_SELECTION_PRIORITY) {
-    const matchingProvider = llmProviders.find((p) => p.provider === provider);
-    if (matchingProvider) {
-      return {
-        providerName: matchingProvider.name,
-        provider: matchingProvider.provider,
-        modelName,
-      };
+    const matchingProviders = llmProviders.filter((p) => p.provider === provider);
+    const exactMatchProvider = matchingProviders.find((candidate) =>
+      candidate.model_configurations.some(
+        (model) => model.is_visible && model.name === modelName
+      )
+    );
+    if (exactMatchProvider) {
+      return buildSelection(exactMatchProvider, modelName);
+    }
+
+    const firstConfiguredProvider = matchingProviders.find(
+      (candidate) => getVisibleModels(candidate).length > 0
+    );
+    if (firstConfiguredProvider) {
+      return buildSelection(firstConfiguredProvider);
     }
   }
 
   // Fallback: first available provider, use its first visible model
-  const firstProvider = llmProviders[0];
-  if (firstProvider) {
-    const firstModel = firstProvider.model_configurations.find(
-      (m) => m.is_visible
-    );
-    return {
-      providerName: firstProvider.name,
-      provider: firstProvider.provider,
-      modelName: firstModel?.name ?? "",
-    };
-  }
-
-  return null;
+  return (
+    llmProviders
+      .map((provider) => buildSelection(provider))
+      .find((selection): selection is BuildLlmSelection => selection !== null) ||
+    null
+  );
 }
 
 // Recommended models config (for UI display)

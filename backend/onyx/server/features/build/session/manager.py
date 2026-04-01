@@ -25,7 +25,6 @@ from acp.schema import ToolCallProgress
 from acp.schema import ToolCallStart
 from sqlalchemy.orm import Session as DBSession
 
-from onyx.configs.app_configs import WEB_DOMAIN
 from onyx.configs.constants import MessageType
 from onyx.db.enums import SandboxStatus
 from onyx.db.llm import fetch_default_llm_model
@@ -45,6 +44,7 @@ from onyx.server.features.build.api.packet_logger import get_packet_logger
 from onyx.server.features.build.api.packet_logger import log_separator
 from onyx.server.features.build.api.packets import BuildPacket
 from onyx.server.features.build.api.packets import ErrorPacket
+from onyx.server.features.build.sandbox.acp_types import SSEKeepalive
 from onyx.server.features.build.api.rate_limit import get_user_rate_limit_status
 from onyx.server.features.build.configs import MAX_TOTAL_UPLOAD_SIZE_BYTES
 from onyx.server.features.build.configs import MAX_UPLOAD_FILES_PER_SESSION
@@ -56,7 +56,7 @@ from onyx.server.features.build.db.build_session import create_build_session__no
 from onyx.server.features.build.db.build_session import create_message
 from onyx.server.features.build.db.build_session import delete_build_session__no_commit
 from onyx.server.features.build.db.build_session import (
-    fetch_llm_provider_by_type_for_build_mode,
+    fetch_llm_provider_for_build_mode,
 )
 from onyx.server.features.build.db.build_session import get_build_session
 from onyx.server.features.build.db.build_session import get_empty_session_for_user
@@ -72,9 +72,6 @@ from onyx.server.features.build.db.sandbox import get_snapshots_for_session
 from onyx.server.features.build.db.sandbox import update_sandbox_heartbeat
 from onyx.server.features.build.db.sandbox import update_sandbox_status__no_commit
 from onyx.server.features.build.sandbox import get_sandbox_manager
-from onyx.server.features.build.sandbox.kubernetes.internal.acp_exec_client import (
-    SSEKeepalive,
-)
 from onyx.server.features.build.sandbox.models import LLMProviderConfig
 from onyx.server.features.build.sandbox.tasks.tasks import (
     _get_disabled_user_library_paths,
@@ -305,6 +302,7 @@ class SessionManager:
 
     def _get_llm_config(
         self,
+        requested_provider_name: str | None,
         requested_provider_type: str | None,
         requested_model_name: str | None,
     ) -> LLMProviderConfig:
@@ -315,6 +313,7 @@ class SessionManager:
         2. System default provider
 
         Args:
+            requested_provider_name: Provider name from user's cookie (e.g., "Aliyun DashScope")
             requested_provider_type: Provider type from user's cookie (e.g., "anthropic", "openai")
             requested_model_name: Model name from user's cookie (e.g., "claude-opus-4-5")
 
@@ -324,24 +323,63 @@ class SessionManager:
         Raises:
             ValueError: If no LLM provider is configured
         """
-        if requested_provider_type and requested_model_name:
-            # Look up provider by type (e.g., "anthropic", "openai", "openrouter")
-            provider = fetch_llm_provider_by_type_for_build_mode(
-                self._db_session, requested_provider_type
+        if requested_provider_name or requested_provider_type:
+            provider = fetch_llm_provider_for_build_mode(
+                self._db_session,
+                provider_type=requested_provider_type,
+                provider_name=requested_provider_name,
             )
             if provider:
-                # Use the requested model directly - the provider's API will
-                # reject invalid models. This allows users to use models that
-                # aren't explicitly configured as "visible" in the admin UI.
-                return LLMProviderConfig(
-                    provider=provider.provider,
-                    model_name=requested_model_name,
-                    api_key=provider.api_key,
-                    api_base=provider.api_base,
+                resolved_model_name = requested_model_name
+                configured_model_names = {
+                    model_configuration.name
+                    for model_configuration in provider.model_configurations
+                }
+                visible_model_name = next(
+                    (
+                        model_configuration.name
+                        for model_configuration in provider.model_configurations
+                        if model_configuration.is_visible
+                    ),
+                    None,
                 )
+                fallback_model_name = (
+                    visible_model_name
+                    or next(iter(configured_model_names), None)
+                )
+
+                if not resolved_model_name or resolved_model_name not in configured_model_names:
+                    if fallback_model_name:
+                        logger.warning(
+                            "Requested build model "
+                            f"{requested_model_name or '<missing>'} is unavailable for "
+                            f"provider {provider.name}; falling back to {fallback_model_name}"
+                        )
+                        resolved_model_name = fallback_model_name
+                    else:
+                        logger.warning(
+                            f"Requested provider {provider.name} has no configured models, "
+                            "falling back to default provider"
+                        )
+                        resolved_model_name = None
+
+                if not resolved_model_name:
+                    logger.warning(
+                        f"No usable model resolved for provider {provider.name}, "
+                        "falling back to default provider"
+                    )
+                else:
+                    return LLMProviderConfig(
+                        provider=provider.provider,
+                        model_name=resolved_model_name,
+                        api_key=provider.api_key,
+                        api_base=provider.api_base,
+                    )
             else:
                 logger.warning(
-                    f"Requested provider type {requested_provider_type} not found, falling back to default"
+                    "Requested build provider not found "
+                    f"(name={requested_provider_name}, type={requested_provider_type}); "
+                    "falling back to default"
                 )
 
         # Fallback to system default
@@ -384,6 +422,7 @@ class SessionManager:
         name: str | None = None,
         user_work_area: str | None = None,
         user_level: str | None = None,
+        llm_provider_name: str | None = None,
         llm_provider_type: str | None = None,
         llm_model_name: str | None = None,
         demo_data_enabled: bool = True,
@@ -400,6 +439,7 @@ class SessionManager:
             name: Optional session name
             user_work_area: User's work area for demo persona (e.g., "engineering")
             user_level: User's level for demo persona (e.g., "ic", "manager")
+            llm_provider_name: Provider name from user's cookie (e.g., "Aliyun DashScope")
             llm_provider_type: Provider type from user's cookie (e.g., "anthropic", "openai")
             llm_model_name: Model name from user's cookie (e.g., "claude-opus-4-5")
             demo_data_enabled: Explicit flag for demo data mode. Defaults to True if not provided.
@@ -428,7 +468,9 @@ class SessionManager:
                 )
 
         # Get LLM config (uses user's selection or falls back to default)
-        llm_config = self._get_llm_config(llm_provider_type, llm_model_name)
+        llm_config = self._get_llm_config(
+            llm_provider_name, llm_provider_type, llm_model_name
+        )
 
         # Build tenant/user-specific path for FILE_SYSTEM documents (sandbox isolation)
         # Each user's sandbox can only access documents they created
@@ -601,6 +643,7 @@ class SessionManager:
         user_id: UUID,
         user_work_area: str | None = None,
         user_level: str | None = None,
+        llm_provider_name: str | None = None,
         llm_provider_type: str | None = None,
         llm_model_name: str | None = None,
         demo_data_enabled: bool = True,
@@ -618,6 +661,7 @@ class SessionManager:
             user_id: The user ID
             user_work_area: User's work area for demo persona (e.g., "engineering")
             user_level: User's level for demo persona (e.g., "ic", "manager")
+            llm_provider_name: Provider name from user's cookie (e.g., "Aliyun DashScope")
             llm_provider_type: Provider type from user's cookie (e.g., "anthropic", "openai")
             llm_model_name: Model name from user's cookie (e.g., "claude-opus-4-5")
             demo_data_enabled: Explicit flag for demo data mode. Defaults to True if not provided.
@@ -680,6 +724,7 @@ class SessionManager:
             user_id=user_id,
             user_work_area=user_work_area,
             user_level=user_level,
+            llm_provider_name=llm_provider_name,
             llm_provider_type=llm_provider_type,
             llm_model_name=llm_model_name,
             demo_data_enabled=demo_data_enabled,
@@ -1148,6 +1193,22 @@ class SessionManager:
             """Format a BuildPacket as SSE."""
             return f"event: message\ndata: {packet.model_dump_json(by_alias=True)}\n\n"
 
+        def _format_agent_message_chunk_event(text: str) -> str:
+            """Format a synthetic agent_message_chunk event as SSE."""
+            data = {
+                "_meta": None,
+                "content": {
+                    "_meta": None,
+                    "annotations": None,
+                    "text": text,
+                    "type": "text",
+                },
+                "sessionUpdate": "agent_message_chunk",
+                "type": "agent_message_chunk",
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            }
+            return f"event: message\ndata: {json.dumps(data)}\n\n"
+
         def _extract_text_from_content(content: Any) -> str:
             """Extract text from ACP content structure."""
             if content is None:
@@ -1445,6 +1506,19 @@ class SessionManager:
                     yield _serialize_acp_event(acp_event, "prompt_response")
 
                 elif isinstance(acp_event, ACPError):
+                    if acp_event.message:
+                        _save_pending_chunks(state)
+                        state.add_message_chunk(acp_event.message)
+                        packet_logger.log(
+                            "agent_message_chunk",
+                            {
+                                "content": {"type": "text", "text": acp_event.message},
+                                "type": "agent_message_chunk",
+                            },
+                        )
+                        packet_logger.log_sse_emit("agent_message_chunk", session_id)
+                        yield _format_agent_message_chunk_event(acp_event.message)
+
                     event_data = acp_event.model_dump(
                         mode="json", by_alias=True, exclude_none=False
                     )
@@ -1793,12 +1867,12 @@ class SessionManager:
                 "sharing_scope": session.sharing_scope,
             }
 
-        # Return the proxy URL - the proxy handles routing to the correct sandbox
-        # for both local and Kubernetes environments
+        # Return a same-origin proxy path so Craft preview works even when users
+        # access Onyx through a remote host instead of localhost.
         webapp_url = None
         ready = False
         if session.nextjs_port:
-            webapp_url = f"{WEB_DOMAIN}/api/build/sessions/{session_id}/webapp"
+            webapp_url = f"/api/build/sessions/{session_id}/webapp"
 
             # Quick health check: can the API server reach the NextJS dev server?
             ready = self._check_nextjs_ready(sandbox.id, session.nextjs_port)

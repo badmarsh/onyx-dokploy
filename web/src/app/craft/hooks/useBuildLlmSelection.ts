@@ -6,6 +6,7 @@ import {
   setBuildLlmSelection,
   clearBuildLlmSelection,
   getDefaultLlmSelection,
+  isBuildLlmSelectionValid,
 } from "@/app/craft/onboarding/constants";
 
 /**
@@ -23,13 +24,9 @@ export function useBuildLlmSelection(
   );
 
   // Validate that a selection is still valid against current providers.
-  // Only checks that the provider exists
   const isSelectionValid = useCallback(
     (sel: BuildLlmSelection | null): boolean => {
-      if (!sel || !llmProviders) return false;
-      return llmProviders.some(
-        (p) => p.provider === sel.provider || p.name === sel.providerName
-      );
+      return isBuildLlmSelectionValid(sel, llmProviders);
     },
     [llmProviders]
   );
