@@ -44,6 +44,18 @@ if TYPE_CHECKING:
 logger = setup_logger()
 
 
+def resolve_cancellation_reason(
+    existing_error_msg: str | None,
+    reason: str | None,
+) -> str:
+    """Avoid overwriting a more specific stored error with a generic cancel reason."""
+    if reason and reason != "Unknown":
+        return reason
+    if existing_error_msg:
+        return existing_error_msg
+    return "Unknown"
+
+
 def get_last_attempt_for_cc_pair(
     cc_pair_id: int,
     search_settings_id: int,
@@ -354,8 +366,18 @@ def mark_attempt_canceled(
 
         if not attempt.time_started:
             attempt.time_started = datetime.now(timezone.utc)
+
+        # Do not downgrade a completed terminal state to canceled because a
+        # late stop signal or cleanup path arrived after the real outcome.
+        if attempt.status.is_terminal() and attempt.status != IndexingStatus.CANCELED:
+            logger.info(
+                f"Skipping cancel transition for attempt {index_attempt_id}: "
+                f"already terminal with status {attempt.status}"
+            )
+            return
+
         attempt.status = IndexingStatus.CANCELED
-        attempt.error_msg = reason
+        attempt.error_msg = resolve_cancellation_reason(attempt.error_msg, reason)
         db_session.commit()
 
         # Add telemetry for index attempt status change

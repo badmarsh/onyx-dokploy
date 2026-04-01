@@ -108,7 +108,7 @@ from onyx.db.enums import IndexingMode
 from onyx.db.enums import ProcessingMode
 from onyx.db.federated import fetch_all_federated_connectors_parallel
 from onyx.db.index_attempt import get_index_attempts_for_cc_pair
-from onyx.db.index_attempt import get_latest_index_attempts_by_status
+from onyx.db.index_attempt import get_latest_index_attempts
 from onyx.db.index_attempt import get_latest_index_attempts_parallel
 from onyx.db.index_attempt import (
     get_latest_successful_index_attempts_parallel,
@@ -965,18 +965,11 @@ def get_currently_failed_indexing_status(
         False, description="If true, return editable document sets"
     ),
 ) -> list[FailedConnectorIndexingStatus]:
-    # Get the latest failed indexing attempts
-    latest_failed_indexing_attempts = get_latest_index_attempts_by_status(
+    # Only report connectors whose latest finished attempt is currently failed.
+    latest_finished_attempts = get_latest_index_attempts(
         secondary_index=secondary_index,
         db_session=db_session,
-        status=IndexingStatus.FAILED,
-    )
-
-    # Get the latest successful indexing attempts
-    latest_successful_indexing_attempts = get_latest_index_attempts_by_status(
-        secondary_index=secondary_index,
-        db_session=db_session,
-        status=IndexingStatus.SUCCESS,
+        only_finished=True,
     )
 
     # Get all connector credential pairs
@@ -986,16 +979,10 @@ def get_currently_failed_indexing_status(
         get_editable=get_editable,
     )
 
-    # Filter out failed attempts that have a more recent successful attempt
-    filtered_failed_attempts = [
-        failed_attempt
-        for failed_attempt in latest_failed_indexing_attempts
-        if not any(
-            success_attempt.connector_credential_pair_id
-            == failed_attempt.connector_credential_pair_id
-            and success_attempt.time_updated > failed_attempt.time_updated
-            for success_attempt in latest_successful_indexing_attempts
-        )
+    latest_failed_attempts = [
+        attempt
+        for attempt in latest_finished_attempts
+        if attempt.status == IndexingStatus.FAILED
     ]
 
     # Filter cc_pairs to include only those with failed attempts
@@ -1003,15 +990,14 @@ def get_currently_failed_indexing_status(
         cc_pair
         for cc_pair in cc_pairs
         if any(
-            attempt.connector_credential_pair == cc_pair
-            for attempt in filtered_failed_attempts
+            attempt.connector_credential_pair_id == cc_pair.id
+            for attempt in latest_failed_attempts
         )
     ]
 
     # Create a mapping of cc_pair_id to its latest failed index attempt
     cc_pair_to_latest_index_attempt = {
-        attempt.connector_credential_pair_id: attempt
-        for attempt in filtered_failed_attempts
+        attempt.connector_credential_pair_id: attempt for attempt in latest_failed_attempts
     }
 
     indexing_statuses = []

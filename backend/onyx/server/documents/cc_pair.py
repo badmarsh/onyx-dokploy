@@ -302,7 +302,11 @@ def update_cc_pair_status(
 
         for attempt in active_attempts:
             try:
-                IndexingCoordination.request_cancellation(db_session, attempt.id)
+                IndexingCoordination.request_cancellation(
+                    db_session,
+                    attempt.id,
+                    reason="Connector paused by user",
+                )
                 # Revoke the task to prevent it from running
                 if attempt.celery_task_id:
                     client_app.control.revoke(attempt.celery_task_id)

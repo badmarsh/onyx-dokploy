@@ -11,7 +11,6 @@ import {
 import {
   sendMessageStream,
   processSSEStream,
-  fetchSession,
   generateFollowupSuggestions,
   RateLimitError,
 } from "@/app/craft/services/apiServices";
@@ -130,7 +129,7 @@ export function useBuildStreaming() {
       setAbortController(sessionId, controller);
 
       // Set status to running and clear previous stream items
-      updateSessionData(sessionId, { status: "running" });
+      updateSessionData(sessionId, { status: "running", error: null });
       clearStreamItems(sessionId);
 
       // Track accumulated content for streaming text/thinking
@@ -316,19 +315,7 @@ export function useBuildStreaming() {
                 newArtifact.type === "nextjs_app" ||
                 newArtifact.type === "web_app";
               if (isWebapp) {
-                fetchSession(sessionId)
-                  .then((sessionData) => {
-                    if (sessionData.sandbox?.nextjs_port) {
-                      const webappUrl = `http://localhost:${sessionData.sandbox.nextjs_port}`;
-                      updateSessionData(sessionId, { webappUrl });
-                    }
-                  })
-                  .catch((err) =>
-                    console.error(
-                      "Failed to fetch session for webapp URL:",
-                      err
-                    )
-                  );
+                triggerWebappRefresh(sessionId);
               }
               break;
             }
