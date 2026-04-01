@@ -903,6 +903,37 @@ class TestGetLitellmAvailableModels:
             with pytest.raises(OnyxError, match="endpoint not found"):
                 get_litellm_available_models(request, MagicMock(), mock_session)
 
+    def test_existing_v1_suffix_is_not_duplicated(self) -> None:
+        """Test that an existing /v1 suffix still hits a single /v1/models endpoint."""
+        from onyx.server.manage.llm.api import get_litellm_available_models
+
+        mock_session = MagicMock()
+        response = {
+            "data": [
+                {
+                    "id": "openai/gpt-4o",
+                    "object": "model",
+                    "created": 1700000000,
+                    "owned_by": "openai",
+                }
+            ]
+        }
+
+        with patch("onyx.server.manage.llm.api.httpx.get") as mock_get:
+            mock_response = MagicMock()
+            mock_response.json.return_value = response
+            mock_response.raise_for_status = MagicMock()
+            mock_get.return_value = mock_response
+
+            request = LitellmModelsRequest(
+                api_base="https://integrate.api.nvidia.com/v1",
+                api_key="test-key",
+            )
+            get_litellm_available_models(request, MagicMock(), mock_session)
+
+            called_url = mock_get.call_args[0][0]
+            assert called_url == "https://integrate.api.nvidia.com/v1/models"
+
 
 class TestGetBifrostAvailableModels:
     """Tests for the Bifrost model fetch endpoint."""

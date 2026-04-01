@@ -1422,7 +1422,10 @@ def get_litellm_available_models(
 def _get_litellm_models_response(api_key: str, api_base: str) -> dict:
     """Perform GET to Litellm proxy /api/v1/models and return parsed JSON."""
     cleaned_api_base = api_base.strip().rstrip("/")
-    url = f"{cleaned_api_base}/v1/models"
+    if cleaned_api_base.endswith("/v1"):
+        url = f"{cleaned_api_base}/models"
+    else:
+        url = f"{cleaned_api_base}/v1/models"
 
     return _get_openai_compatible_models_response(
         url=url,
