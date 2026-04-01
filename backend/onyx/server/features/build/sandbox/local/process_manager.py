@@ -1,5 +1,6 @@
 """Process management for Next.js server subprocesses."""
 
+import http.client
 import os
 import shutil
 import signal
@@ -64,6 +65,20 @@ class ProcessManager:
             logger.error(f"package.json not found in {web_dir}")
             raise RuntimeError(f"package.json not found in {web_dir}")
 
+        bundler = os.environ.get("SANDBOX_NEXTJS_BUNDLER", "webpack").strip().lower()
+        bundler_args: list[str] = []
+        if bundler in {"webpack", "turbopack", "turbo"}:
+            if bundler == "webpack":
+                bundler_args = ["--webpack"]
+            else:
+                bundler_args = ["--turbopack"]
+        elif bundler:
+            logger.warning(
+                "Unknown SANDBOX_NEXTJS_BUNDLER=%s, falling back to webpack",
+                bundler,
+            )
+            bundler_args = ["--webpack"]
+
         logger.debug(f"Starting npm run dev command in {web_dir}")
         # CRITICAL: Inherit stdout/stderr (None) to prevent pipe buffer overflow.
         # When PIPE is used but never drained, the buffer fills up (64KB on most systems)
@@ -71,8 +86,10 @@ class ProcessManager:
         # This was the root cause of Next.js servers dying after a few minutes.
         # Using None inherits from parent, so logs appear in the backend terminal.
         # FIXME: ideally we should drain the pipe to avoid the buffer overflow, but not for v1
+        command = ["npm", "run", "dev", "--", *bundler_args, "-p", str(port)]
+        logger.info("Starting Next.js with command: %s", " ".join(command))
         process = subprocess.Popen(
-            ["npm", "run", "dev", "--", "-p", str(port)],
+            command,
             cwd=web_dir,
             stdout=None,
             stderr=None,
@@ -127,6 +144,9 @@ class ProcessManager:
         start_time = time.time()
         attempt_count = 0
         last_log_time = start_time
+        request_timeout = float(
+            os.environ.get("SANDBOX_NEXTJS_REQUEST_TIMEOUT_SECONDS", "20")
+        )
 
         while time.time() - start_time < timeout:
             attempt_count += 1
@@ -141,7 +161,7 @@ class ProcessManager:
                 return False
 
             try:
-                with urllib.request.urlopen(url, timeout=2) as response:
+                with urllib.request.urlopen(url, timeout=request_timeout) as response:
                     if response.status == 200:
                         logger.debug(
                             f"Server ready after {elapsed:.1f}s and {attempt_count} attempts"
@@ -154,8 +174,16 @@ class ProcessManager:
                         f"HTTP error {e.code} from {url} after {elapsed:.1f}s ({attempt_count} attempts)"
                     )
                     last_log_time = time.time()
-            except (urllib.error.URLError, TimeoutError) as e:
-                # Log connection errors periodically (every 10 seconds)
+            except (
+                http.client.RemoteDisconnected,
+                ConnectionResetError,
+                urllib.error.URLError,
+                TimeoutError,
+            ) as e:
+                # During Next.js startup the dev server can briefly accept a
+                # connection and then close it before the response is ready.
+                # Treat those transient socket-level failures the same way as
+                # connection-refused/timeouts and keep polling.
                 if time.time() - last_log_time >= 10:
                     logger.debug(
                         f"Still waiting for {url} after {elapsed:.1f}s ({attempt_count} attempts): {type(e).__name__}"

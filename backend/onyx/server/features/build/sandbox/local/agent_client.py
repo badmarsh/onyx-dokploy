@@ -123,7 +123,59 @@ def _find_opencode_binary() -> str | None:
         if path.exists():
             return str(path)
 
+
     return None
+
+
+def _build_session_environment(cwd: str) -> dict[str, str]:
+    """Build a session-local process environment for opencode.
+
+    Keeping HOME, caches, and temp files inside the session workspace makes the
+    agent more capable without relaxing access to the shared container filesystem.
+    """
+    session_root = Path(cwd)
+    session_home = session_root / ".home"
+    session_tmp = session_root / "tmp"
+    session_cache = session_root / ".cache"
+    session_repos = session_root / "repos"
+    session_downloads = session_root / "downloads"
+
+    for path in (
+        session_home,
+        session_tmp,
+        session_cache,
+        session_cache / "npm",
+        session_cache / "pip",
+        session_cache / "uv",
+        session_cache / "yarn",
+        session_cache / "ms-playwright",
+        session_cache / "puppeteer",
+        session_repos,
+        session_downloads,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(session_home),
+            "TMPDIR": str(session_tmp),
+            "TMP": str(session_tmp),
+            "TEMP": str(session_tmp),
+            "XDG_CACHE_HOME": str(session_cache),
+            "PIP_CACHE_DIR": str(session_cache / "pip"),
+            "UV_CACHE_DIR": str(session_cache / "uv"),
+            "npm_config_cache": str(session_cache / "npm"),
+            "NPM_CONFIG_CACHE": str(session_cache / "npm"),
+            "YARN_CACHE_FOLDER": str(session_cache / "yarn"),
+            "PLAYWRIGHT_BROWSERS_PATH": str(session_cache / "ms-playwright"),
+            "PUPPETEER_CACHE_DIR": str(session_cache / "puppeteer"),
+            "CRAFT_REPOS_DIR": str(session_repos),
+            "CRAFT_DOWNLOADS_DIR": str(session_downloads),
+            "CRAFT_TMP_DIR": str(session_tmp),
+        }
+    )
+    return env
 
 
 class ACPAgentClient:
@@ -233,6 +285,7 @@ class ACPAgentClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=_build_session_environment(self._cwd),
         )
 
         try:

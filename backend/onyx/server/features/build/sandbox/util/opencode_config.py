@@ -4,7 +4,47 @@ This module provides a centralized way to generate opencode.json configuration
 that is consistent across local and Kubernetes sandbox environments.
 """
 
+import os
 from typing import Any
+
+
+DEFAULT_ALLOWED_EXTERNAL_DIRECTORIES = (
+    "/workspace/files",
+    "/workspace/demo_data",
+    os.environ.get("PERSISTENT_DOCUMENT_STORAGE_PATH", "/app/file-system"),
+)
+
+
+def _normalize_directory_rule(path: str) -> str:
+    """Normalize external directory rules while preserving the root path."""
+    path = path.strip()
+    if not path:
+        return ""
+    normalized = path.rstrip("/")
+    return normalized or "/"
+
+
+def _build_external_directory_permissions() -> dict[str, str]:
+    """Build allowlist-style external directory permissions.
+
+    The local Craft sandbox runs sessions under a shared container, so the
+    default posture remains deny-by-default. We explicitly allow the standard
+    knowledge directories plus any extra directories supplied via
+    OPENCODE_ALLOWED_EXTERNAL_DIRECTORIES.
+    """
+    permissions: dict[str, str] = {"*": "deny"}
+    configured_dirs = os.environ.get("OPENCODE_ALLOWED_EXTERNAL_DIRECTORIES", "")
+    allowed_dirs = list(DEFAULT_ALLOWED_EXTERNAL_DIRECTORIES)
+    allowed_dirs.extend(configured_dirs.split(","))
+
+    for raw_path in allowed_dirs:
+        path = _normalize_directory_rule(raw_path)
+        if not path:
+            continue
+        permissions[path] = "allow"
+        permissions[f"{path}/**"] = "allow"
+
+    return permissions
 
 
 def build_opencode_config(
@@ -27,33 +67,28 @@ def build_opencode_config(
         api_base: Optional custom API base URL
         disabled_tools: Optional list of tools to disable (e.g., ["question", "webfetch"])
         dev_mode: If True, allow all external directories. If False (Docker/Kubernetes),
-                  only whitelist /workspace/files and /workspace/demo_data.
+                  whitelist only the standard knowledge directories and any
+                  paths from OPENCODE_ALLOWED_EXTERNAL_DIRECTORIES.
 
     Returns:
         Configuration dict ready to be serialized to JSON
     """
-    # Build opencode model string: provider/model-name
     opencode_model = f"{provider}/{model_name}"
 
-    # Build configuration with schema
     config: dict[str, Any] = {
         "$schema": "https://opencode.ai/config.json",
         "model": opencode_model,
         "provider": {},
     }
 
-    # Build provider configuration
     provider_config: dict[str, Any] = {}
 
-    # Add API key if provided
     if api_key:
         provider_config["options"] = {"apiKey": api_key}
 
-    # Add API base if provided
     if api_base:
         provider_config["api"] = api_base
 
-    # Build model configuration with thinking/reasoning options
     options: dict[str, Any] = {}
 
     if provider == "openai":
@@ -74,7 +109,6 @@ def build_opencode_config(
     elif provider == "azure":
         options["reasoningEffort"] = "high"
 
-    # Add model configuration to provider
     if options:
         provider_config["models"] = {
             model_name: {
@@ -82,15 +116,10 @@ def build_opencode_config(
             }
         }
 
-    # Add provider to config
     config["provider"][provider] = provider_config
 
-    # Set default tool permissions
-    # Order matters: last matching rule wins
-    # Allow all files first, then deny specific files
     config["permission"] = {
         "bash": {
-            # Dangerous commands
             "rm": "deny",
             "ssh": "deny",
             "scp": "deny",
@@ -99,7 +128,6 @@ def build_opencode_config(
             "telnet": "deny",
             "nc": "deny",
             "netcat": "deny",
-            # Block file reading commands to force use of read tool with permissions
             "tac": "deny",
             "nl": "deny",
             "od": "deny",
@@ -107,7 +135,7 @@ def build_opencode_config(
             "hexdump": "deny",
             "strings": "deny",
             "base64": "deny",
-            "*": "allow",  # Allow other bash commands
+            "*": "allow",
         },
         "edit": {
             "opencode.json": "deny",
@@ -140,23 +168,11 @@ def build_opencode_config(
         "skill": "allow",
         "question": "allow",
         "webfetch": "allow",
-        # External directory permissions:
-        # - dev_mode: Allow all external directories for local development
-        # - Docker/Kubernetes: Whitelist only specific directories
         "external_directory": (
-            "allow"
-            if dev_mode
-            else {
-                "*": "deny",  # Deny all external directories by default
-                "/workspace/files": "allow",  # Allow files directory
-                "/workspace/files/**": "allow",  # Allow files directory contents
-                "/workspace/demo_data": "allow",  # Allow demo data directory
-                "/workspace/demo_data/**": "allow",  # Allow demo data directory contents
-            }
+            "allow" if dev_mode else _build_external_directory_permissions()
         ),
     }
 
-    # Disable specified tools via permissions
     if disabled_tools:
         for tool in disabled_tools:
             config["permission"][tool] = "deny"
