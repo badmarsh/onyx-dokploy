@@ -429,6 +429,7 @@ export default function BuildChatPanel({
             <BuildMessageList
               messages={session?.messages ?? []}
               streamItems={session?.streamItems ?? []}
+              errorMessage={session?.error}
               isStreaming={isRunning}
               autoScrollEnabled={isAtBottom}
             />
