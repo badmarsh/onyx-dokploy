@@ -2,12 +2,14 @@
 
 import { useRef, useEffect } from "react";
 import Logo from "@/refresh-components/Logo";
+import Text from "@/refresh-components/texts/Text";
 import TextChunk from "@/app/craft/components/TextChunk";
 import ThinkingCard from "@/app/craft/components/ThinkingCard";
 import ToolCallPill from "@/app/craft/components/ToolCallPill";
 import TodoListCard from "@/app/craft/components/TodoListCard";
 import WorkingPill from "@/app/craft/components/WorkingPill";
 import UserMessage from "@/app/craft/components/UserMessage";
+import { SvgAlertCircle } from "@opal/icons";
 import { BuildMessage } from "@/app/craft/types/streamingTypes";
 import {
   StreamItem,
@@ -23,6 +25,24 @@ import { isWorkingToolCall } from "@/app/craft/utils/streamItemHelpers";
 function BlinkingDot() {
   return (
     <span className="animate-pulse flex-none bg-theme-primary-05 inline-block rounded-full h-3 w-3 ml-2 mt-2" />
+  );
+}
+
+function BuildErrorMessage({ message }: { message: string }) {
+  return (
+    <div className="flex items-start gap-3 py-4">
+      <div className="shrink-0 mt-0.5">
+        <Logo folded size={24} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-start gap-2 rounded-12 border border-status-error-02 bg-status-error-00 p-3">
+          <SvgAlertCircle className="h-4 w-4 shrink-0 text-status-error-05" />
+          <Text mainUiBody text05 className="text-status-error-05">
+            {message}
+          </Text>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -67,6 +87,7 @@ function groupStreamItems(items: StreamItem[]): GroupedStreamItem[] {
 interface BuildMessageListProps {
   messages: BuildMessage[];
   streamItems: StreamItem[];
+  errorMessage?: string | null;
   isStreaming?: boolean;
   /** Whether auto-scroll is enabled (user is at bottom) */
   autoScrollEnabled?: boolean;
@@ -84,6 +105,7 @@ interface BuildMessageListProps {
 export default function BuildMessageList({
   messages,
   streamItems,
+  errorMessage = null,
   isStreaming = false,
   autoScrollEnabled = true,
   messagesEndRef: externalMessagesEndRef,
@@ -97,7 +119,13 @@ export default function BuildMessageList({
     if (autoScrollEnabled && messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages.length, streamItems.length, autoScrollEnabled, messagesEndRef]);
+  }, [
+    messages.length,
+    streamItems.length,
+    errorMessage,
+    autoScrollEnabled,
+    messagesEndRef,
+  ]);
 
   // Determine if we should show streaming response area (for current in-progress response)
   const hasStreamItems = streamItems.length > 0;
@@ -221,6 +249,10 @@ export default function BuildMessageList({
               )}
             </div>
           </div>
+        )}
+
+        {!isStreaming && errorMessage && !hasStreamItems && (
+          <BuildErrorMessage message={errorMessage} />
         )}
 
         {/* Scroll anchor */}
