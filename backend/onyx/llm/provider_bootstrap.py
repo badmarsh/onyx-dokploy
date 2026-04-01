@@ -3,16 +3,7 @@ from onyx.server.manage.llm.models import LLMProviderUpsertRequest
 from onyx.server.manage.llm.models import ModelConfigurationUpsertRequest
 
 
-def normalize_openai_compatible_api_base(api_base: str) -> str:
-    cleaned_api_base = api_base.strip().rstrip("/")
-    return (
-        cleaned_api_base
-        if cleaned_api_base.endswith("/v1")
-        else f"{cleaned_api_base}/v1"
-    )
-
-
-def build_static_openai_compatible_provider_request(
+def build_uncensored_lm_provider_request(
     *,
     name: str,
     api_key: str,
@@ -23,9 +14,9 @@ def build_static_openai_compatible_provider_request(
     return LLMProviderUpsertRequest(
         id=existing_id,
         name=name,
-        provider=LlmProviderNames.OPENAI,
+        provider=LlmProviderNames.UNCENSORED_LM,
         api_key=api_key,
-        api_base=normalize_openai_compatible_api_base(api_base),
+        api_base=api_base.strip().rstrip("/"),
         model_configurations=[
             ModelConfigurationUpsertRequest(
                 name=model_name,

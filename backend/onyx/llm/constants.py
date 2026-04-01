@@ -26,6 +26,7 @@ class LlmProviderNames(str, Enum):
     MISTRAL = "mistral"
     LITELLM_PROXY = "litellm_proxy"
     BIFROST = "bifrost"
+    UNCENSORED_LM = "uncensored_lm"
 
     def __str__(self) -> str:
         """Needed so things like:
@@ -64,6 +65,7 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     LlmProviderNames.LM_STUDIO: "LM Studio",
     LlmProviderNames.LITELLM_PROXY: "LiteLLM Proxy",
     LlmProviderNames.BIFROST: "Bifrost",
+    LlmProviderNames.UNCENSORED_LM: "Uncensored LM",
     "groq": "Groq",
     "anyscale": "Anyscale",
     "deepseek": "DeepSeek",

@@ -46,7 +46,7 @@ from onyx.key_value_store.factory import get_kv_store
 from onyx.key_value_store.interface import KvKeyNotFoundError
 from onyx.llm.constants import LlmProviderNames
 from onyx.llm.provider_bootstrap import (
-    build_static_openai_compatible_provider_request,
+    build_uncensored_lm_provider_request,
 )
 from onyx.llm.well_known_providers.llm_provider_options import get_openai_model_names
 from onyx.natural_language_processing.search_nlp_models import EmbeddingModel
@@ -298,7 +298,7 @@ def setup_postgres(db_session: Session) -> None:
         existing = fetch_existing_llm_provider(
             name="Uncensored LM", db_session=db_session
         )
-        provider_req = build_static_openai_compatible_provider_request(
+        provider_req = build_uncensored_lm_provider_request(
             name="Uncensored LM",
             api_key=UNCENSORED_API_KEY,
             api_base=UNCENSORED_API_URL,

@@ -1578,6 +1578,116 @@ def test_openrouter_does_not_retry_without_tools_when_tool_use_is_required() -> 
         assert mock_completion.call_count == 1
 
 
+def test_uncensored_lm_invoke_uses_root_endpoint_and_ignores_optional_tools() -> None:
+    llm = LitellmLLM(
+        api_key="test_key",
+        timeout=30,
+        model_provider=LlmProviderNames.UNCENSORED_LM,
+        model_name="uncensored-lm",
+        api_base="https://example.com/functions/v1/uncensoredlm-api",
+        max_input_tokens=32000,
+    )
+
+    messages: LanguageModelInput = [UserMessage(content="Say hello")]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "id": "chatcmpl-123",
+                "created": 1234567890,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 1,
+                    "total_tokens": 11,
+                },
+            }
+
+    with patch("httpx.post", return_value=FakeResponse()) as mock_post:
+        result = llm.invoke(
+            messages,
+            tools=tools,
+            tool_choice=ToolChoiceOptions.AUTO,
+            max_tokens=8,
+        )
+
+        assert result.choice.message.content == "Hello"
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        assert args[0] == "https://example.com/functions/v1/uncensoredlm-api"
+        assert kwargs["json"]["model"] == "uncensored-lm"
+        assert kwargs["json"]["messages"] == [{"role": "user", "content": "Say hello"}]
+        assert kwargs["json"]["max_tokens"] == 8
+        assert "tools" not in kwargs["json"]
+
+
+def test_uncensored_lm_stream_parses_sse_chunks() -> None:
+    llm = LitellmLLM(
+        api_key="test_key",
+        timeout=30,
+        model_provider=LlmProviderNames.UNCENSORED_LM,
+        model_name="uncensored-lm",
+        api_base="https://example.com/functions/v1/uncensoredlm-api",
+        max_input_tokens=32000,
+    )
+
+    messages: LanguageModelInput = [UserMessage(content="Say hello")]
+
+    class FakeStreamResponse:
+        def __enter__(self) -> "FakeStreamResponse":
+            return self
+
+        def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_lines(self) -> list[str]:
+            return [
+                'data: {"id":"chatcmpl-123","created":1234567890,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-123","created":1234567890,"choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}',
+                'data: {"id":"chatcmpl-123","created":1234567890,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}',
+                "data: [DONE]",
+            ]
+
+    with patch("httpx.stream", return_value=FakeStreamResponse()) as mock_stream:
+        chunks = list(llm.stream(messages, max_tokens=8))
+
+        assert [chunk.choice.delta.content for chunk in chunks] == ["", "Hello", None]
+        assert chunks[-1].choice.finish_reason == "stop"
+        assert chunks[-1].usage is not None
+        assert chunks[-1].usage.total_tokens == 11
+        mock_stream.assert_called_once()
+        args, kwargs = mock_stream.call_args
+        assert args[0] == "POST"
+        assert args[1] == "https://example.com/functions/v1/uncensoredlm-api"
+        assert kwargs["json"]["stream"] is True
+
+
 def test_bifrost_normalizes_api_base_in_model_kwargs() -> None:
     llm = LitellmLLM(
         api_key="test_key",

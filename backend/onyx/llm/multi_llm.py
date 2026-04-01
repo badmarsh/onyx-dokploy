@@ -1,4 +1,5 @@
 import os
+import json
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -23,6 +24,13 @@ from onyx.llm.interfaces import ToolChoiceOptions
 from onyx.llm.model_response import ModelResponse
 from onyx.llm.model_response import ModelResponseStream
 from onyx.llm.model_response import Usage
+from onyx.llm.model_response import Choice
+from onyx.llm.model_response import Delta
+from onyx.llm.model_response import Message
+from onyx.llm.model_response import StreamingChoice
+from onyx.llm.model_response import _parse_delta_tool_calls
+from onyx.llm.model_response import _parse_message_tool_calls
+from onyx.llm.model_response import _usage_from_usage_data
 from onyx.llm.models import ANTHROPIC_REASONING_EFFORT_BUDGET
 from onyx.llm.models import OPENAI_REASONING_EFFORT
 from onyx.llm.request_context import get_llm_mock_response
@@ -245,6 +253,10 @@ def _should_retry_openrouter_without_tools(
         and tool_choice != ToolChoiceOptions.REQUIRED
         and _exception_chain_contains(error, "No endpoints found that support tool use")
     )
+
+
+def _provider_supports_native_tools(model_provider: str) -> bool:
+    return model_provider != LlmProviderNames.UNCENSORED_LM
 
 
 def _is_vertex_model_rejecting_output_config(model_name: str) -> bool:
@@ -712,6 +724,174 @@ class LitellmLLM(LLM):
             max_input_tokens=self._max_input_tokens,
         )
 
+    def _get_uncensored_lm_headers(self) -> dict[str, str]:
+        headers = dict(self._model_kwargs.get("extra_headers") or {})
+        if self._api_key:
+            headers["Authorization"] = (
+                self._api_key
+                if self._api_key.lower().startswith("bearer ")
+                else f"Bearer {self._api_key}"
+            )
+        headers["Content-Type"] = "application/json"
+        return headers
+
+    def _build_uncensored_lm_messages(
+        self,
+        prompt: LanguageModelInput,
+        tools: list[dict] | None,
+        tool_choice: ToolChoiceOptions | None,
+    ) -> list[dict[str, Any]]:
+        messages = _prompt_to_dicts(prompt)
+
+        if tools and tool_choice == ToolChoiceOptions.REQUIRED:
+            raise ValueError("Uncensored LM does not support required tool use.")
+
+        if tools and not _provider_supports_native_tools(self._model_provider):
+            logger.warning(
+                "Ignoring optional tools for provider %s because the upstream API does not support tool use.",
+                self._model_provider,
+            )
+
+        if _messages_contain_tool_content(messages):
+            messages = _strip_tool_content_from_messages(messages)
+
+        return messages
+
+    def _invoke_uncensored_lm(
+        self,
+        prompt: LanguageModelInput,
+        tools: list[dict] | None,
+        tool_choice: ToolChoiceOptions | None,
+        max_tokens: int | None,
+    ) -> ModelResponse:
+        import httpx
+
+        if not self._api_base:
+            raise ValueError("Uncensored LM provider requires api_base to be set.")
+
+        response = httpx.post(
+            self._api_base,
+            headers=self._get_uncensored_lm_headers(),
+            json={
+                "model": self._deployment_name or self._model_version,
+                "messages": self._build_uncensored_lm_messages(
+                    prompt=prompt,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                ),
+                "max_tokens": max_tokens,
+                "temperature": self._temperature,
+            },
+            timeout=self._timeout,
+        )
+        response.raise_for_status()
+        response_data = response.json()
+
+        response_id, created, choice_data = (
+            str(response_data.get("id")),
+            str(response_data.get("created")),
+            (response_data.get("choices") or [{}])[0],
+        )
+        message_data: dict[str, Any] = choice_data.get("message") or {}
+        parsed_tool_calls = _parse_message_tool_calls(message_data.get("tool_calls"))
+
+        model_response = ModelResponse(
+            id=response_id,
+            created=created,
+            choice=Choice(
+                finish_reason=choice_data.get("finish_reason"),
+                index=choice_data.get("index", 0),
+                message=Message(
+                    content=message_data.get("content"),
+                    role=message_data.get("role", "assistant"),
+                    tool_calls=parsed_tool_calls if parsed_tool_calls else None,
+                    reasoning_content=message_data.get("reasoning_content"),
+                ),
+            ),
+            usage=(
+                _usage_from_usage_data(response_data.get("usage"))
+                if response_data.get("usage")
+                else None
+            ),
+        )
+
+        if model_response.usage:
+            self._track_llm_cost(model_response.usage)
+
+        return model_response
+
+    def _stream_uncensored_lm(
+        self,
+        prompt: LanguageModelInput,
+        tools: list[dict] | None,
+        tool_choice: ToolChoiceOptions | None,
+        max_tokens: int | None,
+    ) -> Iterator[ModelResponseStream]:
+        import httpx
+
+        if not self._api_base:
+            raise ValueError("Uncensored LM provider requires api_base to be set.")
+
+        with httpx.stream(
+            "POST",
+            self._api_base,
+            headers=self._get_uncensored_lm_headers(),
+            json={
+                "model": self._deployment_name or self._model_version,
+                "messages": self._build_uncensored_lm_messages(
+                    prompt=prompt,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                ),
+                "max_tokens": max_tokens,
+                "temperature": self._temperature,
+                "stream": True,
+            },
+            timeout=self._timeout,
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+
+                decoded_line = line.decode("utf-8") if isinstance(line, bytes) else line
+                if not decoded_line.startswith("data:"):
+                    continue
+
+                payload = decoded_line.removeprefix("data:").strip()
+                if not payload or payload == "[DONE]":
+                    continue
+
+                chunk_data = json.loads(payload)
+                choice_data = (chunk_data.get("choices") or [{}])[0]
+                delta_data: dict[str, Any] = choice_data.get("delta") or {}
+
+                model_response = ModelResponseStream(
+                    id=str(chunk_data.get("id")),
+                    created=str(chunk_data.get("created")),
+                    choice=StreamingChoice(
+                        finish_reason=choice_data.get("finish_reason"),
+                        index=choice_data.get("index", 0),
+                        delta=Delta(
+                            content=delta_data.get("content"),
+                            reasoning_content=delta_data.get("reasoning_content"),
+                            tool_calls=_parse_delta_tool_calls(
+                                delta_data.get("tool_calls")
+                            ),
+                        ),
+                    ),
+                    usage=(
+                        _usage_from_usage_data(chunk_data.get("usage"))
+                        if chunk_data.get("usage")
+                        else None
+                    ),
+                )
+
+                if model_response.usage:
+                    self._track_llm_cost(model_response.usage)
+
+                yield model_response
+
     def invoke(
         self,
         prompt: LanguageModelInput,
@@ -727,6 +907,14 @@ class LitellmLLM(LLM):
         from litellm import ModelResponse as LiteLLMModelResponse
 
         from onyx.llm.model_response import from_litellm_model_response
+
+        if self._model_provider == LlmProviderNames.UNCENSORED_LM:
+            return self._invoke_uncensored_lm(
+                prompt=prompt,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_tokens=max_tokens,
+            )
 
         # HTTPHandler Threading & Connection Pool Notes:
         # =============================================
@@ -823,6 +1011,15 @@ class LitellmLLM(LLM):
         from litellm import HTTPHandler
 
         from onyx.llm.model_response import from_litellm_model_response_stream
+
+        if self._model_provider == LlmProviderNames.UNCENSORED_LM:
+            yield from self._stream_uncensored_lm(
+                prompt=prompt,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_tokens=max_tokens,
+            )
+            return
 
         # HTTPHandler Threading & Connection Pool Notes:
         # =============================================

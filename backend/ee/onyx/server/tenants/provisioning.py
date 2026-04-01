@@ -57,7 +57,7 @@ from onyx.llm.well_known_providers.llm_provider_options import (
     model_configurations_for_provider,
 )
 from onyx.llm.provider_bootstrap import (
-    build_static_openai_compatible_provider_request,
+    build_uncensored_lm_provider_request,
 )
 from onyx.server.manage.embedding.models import CloudEmbeddingProviderCreationRequest
 from onyx.server.manage.llm.models import LLMProviderUpsertRequest
@@ -473,7 +473,7 @@ def configure_default_api_keys(db_session: Session) -> None:
         )
 
     if UNCENSORED_API_KEY and UNCENSORED_API_URL:
-        uncensored_provider = build_static_openai_compatible_provider_request(
+        uncensored_provider = build_uncensored_lm_provider_request(
             name="Uncensored LM",
             api_key=UNCENSORED_API_KEY,
             api_base=UNCENSORED_API_URL,
