@@ -7,6 +7,9 @@ from onyx.configs.app_configs import DISABLE_VECTOR_DB
 from onyx.configs.app_configs import ENABLE_OPENSEARCH_INDEXING_FOR_ONYX
 from onyx.configs.app_configs import INTEGRATION_TESTS_MODE
 from onyx.configs.app_configs import MANAGED_VESPA
+from onyx.configs.app_configs import UNCENSORED_API_KEY
+from onyx.configs.app_configs import UNCENSORED_API_URL
+from onyx.configs.app_configs import UNCENSORED_DEFAULT_CHAT_MODEL
 from onyx.configs.app_configs import VESPA_NUM_ATTEMPTS_ON_STARTUP
 from onyx.configs.constants import KV_REINDEX_KEY
 from onyx.configs.embedding_configs import SUPPORTED_EMBEDDING_MODELS
@@ -42,6 +45,9 @@ from onyx.indexing.models import IndexingSetting
 from onyx.key_value_store.factory import get_kv_store
 from onyx.key_value_store.interface import KvKeyNotFoundError
 from onyx.llm.constants import LlmProviderNames
+from onyx.llm.provider_bootstrap import (
+    build_static_openai_compatible_provider_request,
+)
 from onyx.llm.well_known_providers.llm_provider_options import get_openai_model_names
 from onyx.natural_language_processing.search_nlp_models import EmbeddingModel
 from onyx.natural_language_processing.search_nlp_models import warm_up_bi_encoder
@@ -286,6 +292,34 @@ def setup_postgres(db_session: Session) -> None:
         update_default_provider(
             provider_id=new_llm_provider.id, model_name=llm_model, db_session=db_session
         )
+
+    if UNCENSORED_API_KEY and UNCENSORED_API_URL:
+        logger.notice("Verifying Uncensored LM provider.")
+        existing = fetch_existing_llm_provider(
+            name="Uncensored LM", db_session=db_session
+        )
+        provider_req = build_static_openai_compatible_provider_request(
+            name="Uncensored LM",
+            api_key=UNCENSORED_API_KEY,
+            api_base=UNCENSORED_API_URL,
+            model_name=UNCENSORED_DEFAULT_CHAT_MODEL,
+            existing_id=existing.id if existing else None,
+        )
+        try:
+            provider = upsert_llm_provider(
+                llm_provider_upsert_request=provider_req, db_session=db_session
+            )
+        except ValueError as e:
+            logger.warning(
+                "Failed to upsert Uncensored LM provider during setup: %s", e
+            )
+        else:
+            if fetch_default_llm_model(db_session) is None:
+                update_default_provider(
+                    provider_id=provider.id,
+                    model_name=UNCENSORED_DEFAULT_CHAT_MODEL,
+                    db_session=db_session,
+                )
 
 
 def update_default_multipass_indexing(db_session: Session) -> None:

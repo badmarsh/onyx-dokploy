@@ -27,6 +27,9 @@ from onyx.configs.app_configs import CONTROL_PLANE_API_BASE_URL
 from onyx.configs.app_configs import DEV_MODE
 from onyx.configs.app_configs import OPENAI_DEFAULT_API_KEY
 from onyx.configs.app_configs import OPENROUTER_DEFAULT_API_KEY
+from onyx.configs.app_configs import UNCENSORED_API_KEY
+from onyx.configs.app_configs import UNCENSORED_API_URL
+from onyx.configs.app_configs import UNCENSORED_DEFAULT_CHAT_MODEL
 from onyx.configs.app_configs import VERTEXAI_DEFAULT_CREDENTIALS
 from onyx.configs.app_configs import VERTEXAI_DEFAULT_LOCATION
 from onyx.db.engine.sql_engine import get_session_with_shared_schema
@@ -52,6 +55,9 @@ from onyx.llm.well_known_providers.llm_provider_options import (
 )
 from onyx.llm.well_known_providers.llm_provider_options import (
     model_configurations_for_provider,
+)
+from onyx.llm.provider_bootstrap import (
+    build_static_openai_compatible_provider_request,
 )
 from onyx.server.manage.embedding.models import CloudEmbeddingProviderCreationRequest
 from onyx.server.manage.llm.models import LLMProviderUpsertRequest
@@ -464,6 +470,19 @@ def configure_default_api_keys(db_session: Session) -> None:
     else:
         logger.info(
             "OPENROUTER_DEFAULT_API_KEY not set, skipping OpenRouter provider configuration"
+        )
+
+    if UNCENSORED_API_KEY and UNCENSORED_API_URL:
+        uncensored_provider = build_static_openai_compatible_provider_request(
+            name="Uncensored LM",
+            api_key=UNCENSORED_API_KEY,
+            api_base=UNCENSORED_API_URL,
+            model_name=UNCENSORED_DEFAULT_CHAT_MODEL,
+        )
+        _upsert(uncensored_provider, UNCENSORED_DEFAULT_CHAT_MODEL)
+    else:
+        logger.info(
+            "UNCENSORED_API_KEY or UNCENSORED_API_URL not set, skipping Uncensored LM provider configuration"
         )
 
     # Configure Cohere embedding provider
