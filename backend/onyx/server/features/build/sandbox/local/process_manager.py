@@ -91,6 +91,7 @@ class ProcessManager:
         process = subprocess.Popen(
             command,
             cwd=web_dir,
+            start_new_session=True,
             stdout=None,
             stderr=None,
         )
@@ -217,7 +218,8 @@ class ProcessManager:
     def terminate_process(self, pid: int, timeout: float = 5.0) -> bool:
         """Gracefully terminate process.
 
-        1. Send SIGTERM
+        1. Send SIGTERM to the process group when it is isolated
+        2. Otherwise terminate the process tree best-effort
         2. Wait up to timeout seconds
         3. If still running, send SIGKILL
 
@@ -231,25 +233,77 @@ class ProcessManager:
         if not self.is_process_running(pid):
             return False
 
+        process_group_id: int | None = None
+        kill_process_group = False
         try:
-            os.kill(pid, signal.SIGTERM)
+            process_group_id = os.getpgid(pid)
+            kill_process_group = process_group_id != os.getpgrp()
         except ProcessLookupError:
             return False
+        except OSError:
+            process_group_id = None
+
+        child_pids = [] if kill_process_group else self._get_child_process_ids(pid)
+        target_pids = [pid, *child_pids]
+
+        if kill_process_group and process_group_id is not None:
+            try:
+                os.killpg(process_group_id, signal.SIGTERM)
+            except ProcessLookupError:
+                return False
+        else:
+            self._signal_processes(target_pids, signal.SIGTERM)
 
         # Wait for graceful shutdown
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if not self.is_process_running(pid):
+            if kill_process_group and process_group_id is not None:
+                if not self._is_process_group_running(process_group_id):
+                    return True
+            elif not any(self.is_process_running(target_pid) for target_pid in target_pids):
                 return True
             time.sleep(0.1)
 
         # Force kill if still running
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if kill_process_group and process_group_id is not None:
+            try:
+                os.killpg(process_group_id, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            self._signal_processes(target_pids, signal.SIGKILL)
 
         return True
+
+    def _signal_processes(self, pids: list[int], sig: int) -> None:
+        """Signal each PID individually, ignoring processes that already exited."""
+        for target_pid in pids:
+            try:
+                os.kill(target_pid, sig)
+            except ProcessLookupError:
+                continue
+
+    def _is_process_group_running(self, process_group_id: int) -> bool:
+        """Check whether a process group still has any live members."""
+        try:
+            os.killpg(process_group_id, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    def _get_child_process_ids(self, pid: int) -> list[int]:
+        """Best-effort lookup for descendant PIDs."""
+        try:
+            import psutil
+
+            process = psutil.Process(pid)
+            return [child.pid for child in process.children(recursive=True)]
+        except ImportError:
+            return []
+        except Exception:
+            return []
 
     def get_process_info(self, pid: int) -> dict[str, str | int | float] | None:
         """Get information about a running process.

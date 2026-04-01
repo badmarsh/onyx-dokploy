@@ -48,6 +48,16 @@ from pydantic import BaseModel
 from pydantic import ValidationError
 
 from onyx.server.features.build.api.packet_logger import get_packet_logger
+from onyx.server.features.build.sandbox.acp_error_handling import (
+    build_empty_prompt_response_error,
+)
+from onyx.server.features.build.sandbox.acp_error_handling import (
+    extract_session_error_event,
+)
+from onyx.server.features.build.sandbox.acp_error_handling import (
+    should_treat_prompt_response_as_error,
+)
+from onyx.server.features.build.sandbox.acp_types import SSEKeepalive
 from onyx.server.features.build.configs import ACP_MESSAGE_TIMEOUT
 from onyx.server.features.build.configs import SSE_KEEPALIVE_INTERVAL
 from onyx.utils.logger import setup_logger
@@ -63,19 +73,6 @@ DEFAULT_CLIENT_INFO = {
     "title": "Onyx Sandbox Agent Client (K8s Exec)",
     "version": "1.0.0",
 }
-
-
-@dataclass
-class SSEKeepalive:
-    """Marker event to signal that an SSE keepalive should be sent.
-
-    This is yielded when no ACP events have been received for SSE_KEEPALIVE_INTERVAL
-    seconds, allowing the SSE stream to send a comment to keep the connection alive.
-
-    Note: This is an internal event type - it's consumed by session/manager.py and
-    converted to an SSE comment before leaving that layer. It should not be exposed
-    to external consumers.
-    """
 
 
 # Union type for all possible events from send_message
@@ -613,12 +610,34 @@ class ACPExecClient:
                     packet_logger.log_jsonrpc_response(
                         request_id, result=result, context="k8s"
                     )
-                    try:
-                        prompt_response = PromptResponse.model_validate(result)
+                    if should_treat_prompt_response_as_error(result, events_yielded):
+                        completion_reason = "empty_prompt_response"
+                        empty_response_error = build_empty_prompt_response_error(
+                            result
+                        )
                         events_yielded += 1
-                        yield prompt_response
-                    except ValidationError as e:
-                        logger.error(f"[ACP] PromptResponse validation failed: {e}")
+                        yield empty_response_error
+                    else:
+                        try:
+                            prompt_response = PromptResponse.model_validate(result)
+                            events_yielded += 1
+                            yield prompt_response
+                        except ValidationError as e:
+                            logger.error(f"[ACP] PromptResponse validation failed: {e}")
+
+                elapsed_ms = (time.time() - start_time) * 1000
+                logger.info(
+                    f"[ACP] Prompt complete: "
+                    f"reason={completion_reason} acp_session={session_id} "
+                    f"events={events_yielded} elapsed={elapsed_ms:.0f}ms"
+                )
+                break
+
+            session_error = extract_session_error_event(message_data)
+            if session_error is not None:
+                completion_reason = "session_error_notification"
+                events_yielded += 1
+                yield session_error
 
                 elapsed_ms = (time.time() - start_time) * 1000
                 logger.info(
@@ -635,14 +654,28 @@ class ACPExecClient:
 
                 prompt_complete = False
                 for event in self._process_session_update(update):
+                    if isinstance(event, PromptResponse) and (
+                        should_treat_prompt_response_as_error(
+                            update,
+                            events_yielded,
+                            ignored_keys={"sessionUpdate"},
+                        )
+                    ):
+                        event = build_empty_prompt_response_error(update)
+
                     events_yielded += 1
                     yield event
                     if isinstance(event, PromptResponse):
                         prompt_complete = True
                         break
+                    if isinstance(event, Error):
+                        completion_reason = "error_via_notification"
+                        prompt_complete = True
+                        break
 
                 if prompt_complete:
-                    completion_reason = "prompt_response_via_notification"
+                    if completion_reason == "unknown":
+                        completion_reason = "prompt_response_via_notification"
                     elapsed_ms = (time.time() - start_time) * 1000
                     logger.info(
                         f"[ACP] Prompt complete: "
