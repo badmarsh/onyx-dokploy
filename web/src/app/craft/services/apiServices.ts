@@ -85,6 +85,7 @@ export interface CreateSessionOptions {
   demoDataEnabled?: boolean;
   userWorkArea?: string | null;
   userLevel?: string | null;
+  llmProviderName?: string | null;
   // LLM selection from user's cookie
   llmProviderType?: string | null; // Provider type (e.g., "anthropic", "openai")
   llmModelName?: string | null;
@@ -101,6 +102,7 @@ export async function createSession(
       demo_data_enabled: options?.demoDataEnabled ?? true,
       user_work_area: options?.userWorkArea || null,
       user_level: options?.userLevel || null,
+      llm_provider_name: options?.llmProviderName || null,
       llm_provider_type: options?.llmProviderType || null,
       llm_model_name: options?.llmModelName || null,
     }),

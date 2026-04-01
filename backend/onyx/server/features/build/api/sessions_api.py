@@ -135,6 +135,7 @@ def create_session(
                 request.user_work_area if request.demo_data_enabled else None
             ),
             user_level=request.user_level if request.demo_data_enabled else None,
+            llm_provider_name=request.llm_provider_name,
             llm_provider_type=request.llm_provider_type,
             llm_model_name=request.llm_model_name,
             demo_data_enabled=request.demo_data_enabled,
@@ -435,7 +436,7 @@ def restore_session(
                 # Fall through to TERMINATED handling below
 
         session_manager = SessionManager(db_session)
-        llm_config = session_manager._get_llm_config(None, None)
+        llm_config = session_manager._get_llm_config(None, None, None)
 
         if sandbox.status in (SandboxStatus.SLEEPING, SandboxStatus.TERMINATED):
             # Mark as PROVISIONING before the long-running provision() call

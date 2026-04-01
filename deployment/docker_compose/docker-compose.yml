@@ -50,8 +50,7 @@ services:
       uvicorn onyx.main:app --host 0.0.0.0 --port 8080"
     # Check env.template and copy to .env for env vars
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     depends_on:
       relational_db:
         condition: service_started
@@ -85,6 +84,7 @@ services:
       - REDIS_HOST=${REDIS_HOST:-cache}
       - MODEL_SERVER_HOST=${MODEL_SERVER_HOST:-inference_model_server}
       - CODE_INTERPRETER_BASE_URL=${CODE_INTERPRETER_BASE_URL:-http://code-interpreter:8000}
+      - UNSTRUCTURED_API_URL=${UNSTRUCTURED_API_URL:-http://unstructured:8000}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
       - S3_AWS_ACCESS_KEY_ID=${S3_AWS_ACCESS_KEY_ID:-minioadmin}
       - S3_AWS_SECRET_ACCESS_KEY=${S3_AWS_SECRET_ACCESS_KEY:-minioadmin}
@@ -140,8 +140,7 @@ services:
       fi &&
       /app/scripts/supervisord_entrypoint.sh"
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     depends_on:
       relational_db:
         condition: service_started
@@ -167,6 +166,8 @@ services:
       - REDIS_HOST=${REDIS_HOST:-cache}
       - MODEL_SERVER_HOST=${MODEL_SERVER_HOST:-inference_model_server}
       - INDEXING_MODEL_SERVER_HOST=${INDEXING_MODEL_SERVER_HOST:-indexing_model_server}
+      - CODE_INTERPRETER_BASE_URL=${CODE_INTERPRETER_BASE_URL:-http://code-interpreter:8000}
+      - UNSTRUCTURED_API_URL=${UNSTRUCTURED_API_URL:-http://unstructured:8000}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
       - S3_AWS_ACCESS_KEY_ID=${S3_AWS_ACCESS_KEY_ID:-minioadmin}
       - S3_AWS_SECRET_ACCESS_KEY=${S3_AWS_SECRET_ACCESS_KEY:-minioadmin}
@@ -220,8 +221,7 @@ services:
         - NEXT_PUBLIC_DO_NOT_USE_TOGGLE_OFF_DANSWER_POWERED=${NEXT_PUBLIC_DO_NOT_USE_TOGGLE_OFF_DANSWER_POWERED:-false}
         - NODE_OPTIONS=${NODE_OPTIONS:-"--max-old-space-size=4096"}
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     depends_on:
       - api_server
     restart: unless-stopped
@@ -290,8 +290,7 @@ services:
         exec uvicorn model_server.main:app --host 0.0.0.0 --port 9000;
       fi"
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     restart: unless-stopped
     volumes:
       # Not necessary, this is just to reduce download time during startup
@@ -337,8 +336,7 @@ services:
         exec uvicorn model_server.main:app --host 0.0.0.0 --port 9000;
       fi"
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     restart: unless-stopped
     environment:
       - INDEXING_ONLY=True
@@ -369,8 +367,7 @@ services:
     shm_size: 1g
     command: -c 'max_connections=250'
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     restart: unless-stopped
     # PRODUCTION: Override the defaults by passing in the environment variables
     environment:
@@ -394,8 +391,7 @@ services:
     image: vespaengine/vespa:8.609.39
     restart: unless-stopped
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     environment:
       - VESPA_SKIP_UPGRADE_CHECK=${VESPA_SKIP_UPGRADE_CHECK:-true}
     # DEV: To expose ports, either:
@@ -465,14 +461,22 @@ services:
       - api_server
       - web_server
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     environment:
-      - DOMAIN=localhost
+      - DOMAIN=${DOMAIN:-localhost}
       # Nginx proxy timeout settings (in seconds)
       - NGINX_PROXY_CONNECT_TIMEOUT=${NGINX_PROXY_CONNECT_TIMEOUT:-300}
       - NGINX_PROXY_SEND_TIMEOUT=${NGINX_PROXY_SEND_TIMEOUT:-300}
       - NGINX_PROXY_READ_TIMEOUT=${NGINX_PROXY_READ_TIMEOUT:-300}
+    labels:
+      - traefik.enable=${TRAEFIK_ENABLED:-false}
+      - traefik.http.routers.onyx.rule=Host(`${DOMAIN:-localhost}`)
+      - traefik.http.routers.onyx.entrypoints=${TRAEFIK_ENTRYPOINTS:-websecure}
+      - traefik.http.routers.onyx.priority=${TRAEFIK_PRIORITY:-100}
+      - traefik.http.routers.onyx.tls=${TRAEFIK_TLS:-true}
+      - traefik.http.routers.onyx.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      - traefik.http.routers.onyx.service=onyx-svc
+      - traefik.http.services.onyx-svc.loadbalancer.server.port=80
     ports:
       - "${HOST_PORT_80:-80}:80"
       - "${HOST_PORT:-3000}:80" # allow for localhost:3000 usage, since that is the norm
@@ -512,8 +516,7 @@ services:
     # persistence. explicitly setting save and appendonly forces ephemeral behavior.
     command: redis-server --save "" --appendonly no
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     # Use tmpfs to prevent creation of anonymous volumes for /data
     tmpfs:
       - /data
@@ -529,8 +532,7 @@ services:
     #   - "9004:9000"
     #   - "9005:9001"
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -550,8 +552,7 @@ services:
     command: ["bash", "./entrypoint.sh", "code-interpreter-api"]
     restart: unless-stopped
     env_file:
-      - path: .env
-        required: false
+      - .dokploy.env
 
     # Below is needed for the `docker-out-of-docker` execution mode
     # For Linux rootless Docker, set DOCKER_SOCK_PATH=${XDG_RUNTIME_DIR}/docker.sock
@@ -561,6 +562,36 @@ services:
 
     # uncomment below + comment out the above to use the `docker-in-docker` execution mode
     # privileged: true
+
+  unstructured_api:
+    image: ${UNSTRUCTURED_API_IMAGE:-downloads.unstructured.io/unstructured-io/unstructured-api:latest}
+    container_name: onyx-unstructured-api
+    restart: unless-stopped
+    env_file:
+      - .dokploy.env
+    networks:
+      default:
+        aliases:
+          - unstructured
+          - unstructured_api
+
+  ollama:
+    profiles: ["local-ollama"]
+    image: ollama/ollama:latest
+    container_name: onyx-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/11434' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # PRODUCTION: Uncomment the following certbot service for SSL certificate management
   # certbot:
@@ -581,6 +612,7 @@ volumes:
   db_volume:
   vespa_volume: # Created by the container itself
   minio_data:
+  ollama_data:
   # Caches to prevent re-downloading models, not strictly necessary
   model_cache_huggingface:
   indexing_huggingface_model_cache:
